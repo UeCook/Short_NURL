@@ -1,0 +1,346 @@
+#!/usr/bin/env php
+<?php
+/**
+ * nurl-key — Short_NURL 远程短链管理工具 v2.1
+ *
+ * 通过无头 API（headless）远程管理短链，需要网络连接。
+ * 认证方式：X-Headless-Token 请求头
+ *
+ * 用法：php nurl-key -key "su_xxx" <操作> [参数]
+ *
+ * 操作：
+ *   -list                    查看所有短链
+ *   -stat                    查看配额状态
+ *   -get "code"              查看单条短链
+ *   -add -url "https://..." -ttl 0 [-code "abc"]
+ *                            创建短链（-code 可选，不填自动生成）
+ *   -rm -code "abc"          删除短链
+ *   -h / -help               显示帮助信息
+ *   -v                       查看版本
+ */
+
+// ── 初始化 ───────────────────────────────────────────────
+if (PHP_SAPI !== 'cli') {
+    fwrite(STDERR, "错误：此脚本必须从命令行运行。\n");
+    exit(1);
+}
+
+define('NURL_KEY_VERSION', '2.1');
+
+$configPath = __DIR__ . '/api/config.php';
+if (!file_exists($configPath)) {
+    fwrite(STDERR, "错误：在 $configPath 未找到 config.php\n");
+    exit(1);
+}
+$cfg = require $configPath;
+$domain = $cfg['domain'];
+
+// ── 解析参数 ─────────────────────────────────────────────
+$args = array_slice($argv, 1);
+
+if (empty($args)) {
+    showHelp();
+    exit(0);
+}
+
+$hasH    = in_array('-h', $args) || in_array('-help', $args);
+$hasV    = in_array('-v', $args);
+$hasList = in_array('-list', $args);
+$hasStat = in_array('-stat', $args);
+$hasGet  = in_array('-get', $args);
+$hasAdd  = in_array('-add', $args);
+$hasRm   = in_array('-rm', $args);
+
+// 提取 -key 值
+$key = extractValue($args, '-key');
+// 提取 -get 值（位置参数）
+$getCode = extractValue($args, '-get');
+// 提取 -add 参数
+$addUrl  = extractValue($args, '-url');
+$addTtl  = extractValue($args, '-ttl');
+$addCode = extractValue($args, '-code');
+// 提取 -rm 参数
+$rmCode  = extractValue($args, '-code');
+
+// ── 路由命令 ─────────────────────────────────────────────
+
+if ($hasH) {
+    showHelp();
+    exit(0);
+}
+
+if ($hasV) {
+    echo "nurl-key v" . NURL_KEY_VERSION . "\n";
+    exit(0);
+}
+
+// 所有操作都需要 Key
+if (!$key) {
+    fwrite(STDERR, "错误：缺少密钥。请使用 -key \"su_xxx\" 指定 API Key。\n");
+    exit(1);
+}
+
+if ($hasList) {
+    doList($domain, $key);
+} elseif ($hasStat) {
+    doStat($domain, $key);
+} elseif ($hasGet && $getCode) {
+    doGet($domain, $key, $getCode);
+} elseif ($hasAdd) {
+    doAdd($domain, $key, $addUrl, $addTtl, $addCode);
+} elseif ($hasRm && $rmCode) {
+    doRm($domain, $key, $rmCode);
+} else {
+    fwrite(STDERR, "错误：未指定有效操作。\n");
+    fwrite(STDERR, "运行 'php nurl-key -h' 查看用法。\n");
+    exit(1);
+}
+
+// ═══════════════════════════════════════════════════════════
+// ── 参数解析辅助 ──────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 从参数数组中提取标志对应的值
+ * 支持两种格式：
+ *   -flag "value"  （空格分隔，下一个参数）
+ *   -flag:"value"  （冒号分隔，同一参数内）
+ */
+function extractValue(array $args, string $flag): ?string
+{
+    $colonPrefix = $flag . ':';
+    foreach ($args as $i => $arg) {
+        // -flag:"value" 格式
+        if (strpos($arg, $colonPrefix) === 0) {
+            return substr($arg, strlen($colonPrefix));
+        }
+        // -flag "value" 格式
+        if ($arg === $flag && isset($args[$i + 1])) {
+            $next = $args[$i + 1];
+            // 下一个参数不能是标志（以 - 开头）
+            if (strpos($next, '-') !== 0) {
+                return $next;
+            }
+        }
+    }
+    return null;
+}
+
+// ═══════════════════════════════════════════════════════════
+// ── HTTP 请求辅助 ─────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+
+function headlessGet(string $domain, string $key, string $path): array
+{
+    $url = $domain . '/headless/api' . $path;
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 10,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_HTTPHEADER => [
+            'X-Headless-Token: ' . $key,
+        ],
+    ]);
+    $body = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
+
+    if ($error) {
+        fwrite(STDERR, "网络错误：$error\n");
+        exit(1);
+    }
+
+    $data = json_decode($body, true);
+    return ['code' => $httpCode, 'body' => $data, 'raw' => $body];
+}
+
+function headlessPost(string $domain, string $key, string $path, array $payload): array
+{
+    $url = $domain . '/headless/api' . $path;
+    $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $json,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 10,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_HTTPHEADER => [
+            'Content-Type: application/json',
+            'X-Headless-Token: ' . $key,
+        ],
+    ]);
+    $body = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
+
+    if ($error) {
+        fwrite(STDERR, "网络错误：$error\n");
+        exit(1);
+    }
+
+    $data = json_decode($body, true);
+    return ['code' => $httpCode, 'body' => $data, 'raw' => $body];
+}
+
+function handleErrorResponse(array $resp): void
+{
+    $httpCode = $resp['code'];
+    $body = $resp['body'];
+
+    if ($httpCode >= 400) {
+        if ($body && isset($body['error'])) {
+            fwrite(STDERR, "错误 ({$body['error']}): {$body['message']} [HTTP $httpCode]\n");
+        } else {
+            fwrite(STDERR, "错误：HTTP $httpCode\n");
+            if ($resp['raw']) fwrite(STDERR, "响应：{$resp['raw']}\n");
+        }
+        exit(1);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// ── 命令实现 ──────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+
+function doList(string $domain, string $key): void
+{
+    $resp = headlessGet($domain, $key, '/list');
+    handleErrorResponse($resp);
+
+    $data = $resp['body'];
+    $permanent = $data['permanent'] ?? [];
+    $temporary = $data['temporary'] ?? [];
+
+    echo "短链列表\n";
+    echo str_repeat('─', 60) . "\n\n";
+
+    echo "永久短链（" . count($permanent) . " 条）：\n";
+    if (empty($permanent)) {
+        echo "  （空）\n";
+    } else {
+        foreach ($permanent as $i => $p) {
+            echo "  " . ($i + 1) . ". {$p['id']}  →  {$p['url']}\n";
+            echo "     {$p['lurl']}\n";
+        }
+    }
+    echo "\n";
+
+    echo "临时短链（" . count($temporary) . " 条）：\n";
+    if (empty($temporary)) {
+        echo "  （空）\n";
+    } else {
+        foreach ($temporary as $i => $t) {
+            echo "  " . ($i + 1) . ". {$t['id']}  →  {$t['url']}\n";
+            echo "     {$t['lurl']}\n";
+            echo "     过期：{$t['exp']}\n";
+        }
+    }
+    echo "\n";
+}
+
+function doStat(string $domain, string $key): void
+{
+    $resp = headlessGet($domain, $key, '/stat');
+    handleErrorResponse($resp);
+
+    $data = $resp['body'];
+    echo "配额状态\n";
+    echo str_repeat('─', 40) . "\n";
+    echo "  永久短链：{$data['perm_count']} / {$data['perm_limit']}\n";
+    echo "  临时短链：{$data['temp_count']} / {$data['temp_limit']}\n";
+}
+
+function doGet(string $domain, string $key, string $code): void
+{
+    $resp = headlessGet($domain, $key, '/get/' . $code);
+    handleErrorResponse($resp);
+
+    $data = $resp['body'];
+    echo "短链详情\n";
+    echo str_repeat('─', 40) . "\n";
+    echo "  后缀：    {$data['id']}\n";
+    echo "  目标：    {$data['url']}\n";
+    echo "  短链：    {$data['lurl']}\n";
+    if (isset($data['exp']) && $data['exp'] !== 'permanent') {
+        echo "  过期：    {$data['exp']}\n";
+    } else {
+        echo "  类型：    永久\n";
+    }
+    echo "\n";
+}
+
+function doAdd(string $domain, string $key, ?string $url, ?string $ttl, ?string $code): void
+{
+    if (!$url) {
+        fwrite(STDERR, "错误：缺少目标链接。请使用 -url \"https://...\" 指定。\n");
+        exit(1);
+    }
+
+    $ttlVal = $ttl !== null ? intval($ttl) : 0;
+    $payload = [
+        'url' => $url,
+        'ttl' => $ttlVal,
+    ];
+    if ($code) {
+        $payload['code'] = $code;
+    }
+
+    echo "正在创建短链...\n";
+    $resp = headlessPost($domain, $key, '/create', $payload);
+    handleErrorResponse($resp);
+
+    $data = $resp['body'];
+    echo "创建成功 ✓\n";
+    echo "  短链：{$data['short_url']}\n";
+    if (isset($data['exp'])) {
+        echo "  过期：{$data['exp']}\n";
+    }
+    echo "\n";
+}
+
+function doRm(string $domain, string $key, string $code): void
+{
+    echo "正在删除短链 {$code}...\n";
+    $resp = headlessPost($domain, $key, '/delete', ['code' => $code]);
+    handleErrorResponse($resp);
+
+    echo "删除成功 ✓\n";
+    echo "  已删除：{$code}\n\n";
+}
+
+function showHelp(): void
+{
+    echo "nurl-key — Short_NURL 远程短链管理工具 v" . NURL_KEY_VERSION . "\n\n";
+    echo "用法：php nurl-key -key \"su_xxx\" <操作> [参数]\n\n";
+    echo "操作：\n";
+    echo "  -list                          查看所有短链\n";
+    echo "  -stat                          查看配额状态\n";
+    echo "  -get \"code\"                    查看单条短链\n";
+    echo "  -add -url \"https://...\" \\      创建短链\n";
+    echo "       -ttl 0 [-code \"abc\"]\n";
+    echo "  -rm -code \"abc\"                删除短链\n\n";
+    echo "参数：\n";
+    echo "  -key \"su_xxx\"    API Key（必填）\n";
+    echo "  -url \"https://..\" 目标长链接（-add 必填）\n";
+    echo "  -ttl N           有效期秒数，0=永久（默认 0）\n";
+    echo "  -code \"abc\"      短链后缀，1-4 位（可选）\n\n";
+    echo "标志支持两种赋值格式：\n";
+    echo "  -key \"su_xxx\"    空格分隔\n";
+    echo "  -key:\"su_xxx\"    冒号分隔\n\n";
+    echo "TTL 常用值：\n";
+    echo "  0         永久\n";
+    echo "  1800      30 分钟\n";
+    echo "  3600      1 小时\n";
+    echo "  86400     1 天\n";
+    echo "  604800    7 天\n\n";
+    echo "其他：\n";
+    echo "  -v            查看版本\n";
+    echo "  -h / -help    显示此帮助信息\n\n";
+    echo "本地密钥管理请使用：php nurl\n";
+}

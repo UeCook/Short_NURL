@@ -1,0 +1,133 @@
+<?php
+/**
+ * POST /api/create - 创建短链
+ */
+// @外接口_#1：POST /api/create — 创建短链（前端链路入口）
+require __DIR__ . '/bootstrap.php';
+
+// ── 解析输入 ─────────────────────────────────────────
+$input = json_decode(file_get_contents('php://input'), true);
+if (!$input) {
+    http_response_code(400);
+    echo json_encode(['error' => '无效的请求体'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// ── 验证密钥 ──────────────────────────────────────────
+$key = $input['key'] ?? '';
+if (empty($key)) {
+    http_response_code(406);
+    echo json_encode(['error' => '缺少密钥'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+// @外调用_&3：getKeyStore()->verify — 验证 API Key（KeyStore 密钥校验）
+$keyType = getKeyStore()->verify($key);
+if (!$keyType) {
+    error_log('[auth] Key 验证失败：' . substr($key, 0, 8) . '...');
+    http_response_code(406);
+    echo json_encode(['error' => '密钥失效或不正确'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// ── 验证目标链接 ──────────────────────────────────────
+if (empty($input['url'])) {
+    http_response_code(400);
+    echo json_encode(['error' => '缺少目标链接'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+$url = trim($input['url']);
+if (!filter_var($url, FILTER_VALIDATE_URL) || !preg_match('#^https?://#i', $url)) {
+    http_response_code(400);
+    echo json_encode(['error' => '目标链接无效'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+$ttl = isset($input['ttl']) ? intval($input['ttl']) : 0;
+if ($ttl < 0 || $ttl > $cfg['ttl_max']) {
+    http_response_code(400);
+    echo json_encode(['error' => 'TTL 超限'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+$isTemp = $ttl > 0;
+
+$permStore = new JsonStore($cfg['perm_path'], $cfg['tz_offset']);
+$tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
+
+$code = isset($input['code']) ? trim($input['code']) : '';
+$isCustom = !empty($code);
+if ($isCustom) {
+    $code = strtolower($code);
+    if (!preg_match('/^[0-9a-z-]{1,4}$/', $code)) { http_response_code(400); echo json_encode(['error'=>'后缀格式错误'], JSON_UNESCAPED_UNICODE); exit; }
+    if (in_array($code, ['api','stat','admin','data','lua'])) { http_response_code(400); echo json_encode(['error'=>'保留字'], JSON_UNESCAPED_UNICODE); exit; }
+}
+
+$now = time();
+$domain = $cfg['domain'];
+$tz = $cfg['tz_offset'];
+$exp_str = $isTemp ? formatIso8601($now + $ttl, $tz) : '0';
+$shortUrl = $domain . '/' . $code;
+$entry = ['id' => $code, 'url' => $url, 'lurl' => $shortUrl];
+if ($isTemp) $entry['t'] = $exp_str;
+
+$store = $isTemp ? $tempStore : $permStore;
+$otherStore = $isTemp ? $permStore : $tempStore;
+
+// ── 原子读-检查-写（避免 exit 在 try 块内）──────────
+$store->lockBegin();
+$errorResponse = null;
+try {
+    $data = $store->readLocked();
+    if ($isCustom) {
+        if (isset($data[$code])) { $errorResponse = [409, '已占用']; }
+        // 设计决策：跨 store 检查（$otherStore->find）存在极小概率竞态窗口，
+        // 因为当前仅持有 $store 的锁，$otherStore->find() 内部调用 read() 完全无锁。
+        // 36^4 ≈ 167万空间 vs 9999上限，碰撞概率极低，这是已知的设计决策而非遗漏。
+        elseif ($otherStore->find($code)) { $errorResponse = [409, '已占用']; }
+    } else {
+        $chars = '0123456789abcdefghijklmnopqrstuvwxyz';
+        $maxLen = strlen($chars) - 1;
+        $generated = false;
+        for ($i = 0; $i < 8; $i++) {
+            $candidate = ''; for ($j = 0; $j < 4; $j++) $candidate .= $chars[random_int(0, $maxLen)];
+            if (isset($data[$candidate])) continue;
+            if ($otherStore->find($candidate)) continue;
+            $code = $candidate; $generated = true; break;
+        }
+        if (!$generated) {
+            $currentCount = count($data);
+            $otherCount = $otherStore->count();
+            error_log("[create] 短码生成失败：当前存储量 store={$currentCount}, other={$otherCount}, 重试8次均碰撞");
+            $errorResponse = [500, '无法生成后缀'];
+        } else {
+            $shortUrl = $domain . '/' . $code;
+            $entry['id'] = $code; $entry['lurl'] = $shortUrl;
+        }
+    }
+    if (!$errorResponse) {
+        if ($isTemp) cleanExpiredEntries($data);
+        $activeCount = 0;
+        foreach ($data as $item) { if (!isExpired($item['t'] ?? null)) $activeCount++; }
+        $limit = $cfg[$isTemp ? 'temp_limit' : 'perm_limit'];
+        if ($activeCount >= $limit) { $errorResponse = [429, '已达上限']; }
+    }
+    if (!$errorResponse) {
+        $data[$code] = $entry;
+        $store->writeLocked($data);
+    }
+} catch (\RuntimeException $e) {
+    error_log('[safe_write] ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['error' => '服务器内部错误'], JSON_UNESCAPED_UNICODE);
+    exit;
+} finally { $store->lockEnd(); }
+
+if ($errorResponse) {
+    http_response_code($errorResponse[0]);
+    echo json_encode(['error' => $errorResponse[1]], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// @外调用_&4：internalSet — 写入热存储（通知 OpenResty 更新共享内存）
+internalSet($cfg, $code, $url, $isTemp ? $ttl : 0, $exp_str);
+http_response_code(201);
+if ($isTemp) { echo json_encode(['short_url'=>$shortUrl,'exp'=>$exp_str], JSON_UNESCAPED_UNICODE); }
+else { echo json_encode(['short_url'=>$shortUrl], JSON_UNESCAPED_UNICODE); }

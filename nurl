@@ -1,0 +1,269 @@
+#!/usr/bin/env php
+<?php
+/**
+ * nurl — Short_NURL 本地管理工具 v2.1
+ *
+ * 用法：php nurl <标志>
+ *
+ * 标志：
+ *   -new          生成常驻密钥 + 补充一次性密钥池
+ *   -long         仅轮换常驻密钥
+ *   -full         仅补充一次性密钥池
+ *   -look         显示密钥状态（不显示明文）
+ *   -drop         撤销所有密钥
+ *   -drop -long   仅删除常驻密钥
+ *   -drop -full   仅删除所有一次性密钥
+ *   -sweep        清理过期临时短链
+ *   -v            查看版本
+ *   -h / -help    显示帮助信息
+ *
+ * 所有操作均为纯本地文件读写，不依赖网络。
+ * 短链远程操作请使用：php nurl-key
+ */
+
+// ── 初始化 ───────────────────────────────────────────────
+if (PHP_SAPI !== 'cli') {
+    fwrite(STDERR, "错误：此脚本必须从命令行运行。\n");
+    exit(1);
+}
+
+define('NURL_VERSION', '1.2');
+
+$cliCustomVersion = <<<VERSION
+Short_NURL_Uecook
+  API：v1.5
+  webUI：v1.3
+  HeadLess：v1.0
+  Lua：v1.1
+  CLI：v1.2
+---------------------------
+GitHub：https://uoca.top
+VERSION;
+
+$apiDir = __DIR__ . '/api';
+$configPath = $apiDir . '/config.php';
+
+if (!file_exists($configPath)) {
+    fwrite(STDERR, "错误：在 $configPath 未找到 config.php\n");
+    exit(1);
+}
+
+$cfg = require $configPath;
+
+require_once $apiDir . '/common/helpers.php';
+require_once $apiDir . '/common/keys.php';
+require_once $apiDir . '/common/json_store.php';
+
+$keyStore = new KeyStore(
+    $cfg['keys_path'],
+    $cfg['tz_offset'],
+    $cfg['key_ttl_days'],
+    $cfg['onetime_pool_size'],
+    $cfg['key_charset'],
+    $cfg['key_length']
+);
+
+// ── 解析参数 ─────────────────────────────────────────────
+$args = array_slice($argv, 1);
+
+if (empty($args)) {
+    showHelp();
+    exit(0);
+}
+
+$hasNew  = in_array('-new', $args);
+$hasLong = in_array('-long', $args);
+$hasFull = in_array('-full', $args);
+$hasLook = in_array('-look', $args);
+$hasDrop = in_array('-drop', $args);
+$hasSweep = in_array('-sweep', $args);
+$hasV    = in_array('-v', $args);
+$hasH    = in_array('-h', $args) || in_array('-help', $args);
+
+// ── 路由命令 ─────────────────────────────────────────────
+
+if ($hasH) {
+    showHelp();
+    exit(0);
+}
+
+if ($hasV) {
+    echo ($cliCustomVersion !== '' ? $cliCustomVersion : "nurl v" . NURL_VERSION) . "\n";
+    exit(0);
+}
+
+if ($hasSweep) {
+    doSweep($cfg);
+    exit(0);
+}
+
+if ($hasDrop) {
+    doDrop($keyStore, $hasLong, $hasFull);
+    exit(0);
+}
+
+if ($hasLook) {
+    doLook($keyStore, $cfg);
+    exit(0);
+}
+
+if ($hasNew) {
+    doNew($keyStore, $cfg, $hasLong, $hasFull);
+    exit(0);
+}
+
+if ($hasLong) {
+    // -long 单独使用 = 仅轮换常驻密钥
+    doNew($keyStore, $cfg, true, false);
+    exit(0);
+}
+
+if ($hasFull) {
+    // -full 单独使用 = 仅补充一次性密钥池
+    doNew($keyStore, $cfg, false, true);
+    exit(0);
+}
+
+// 未识别的标志
+fwrite(STDERR, "错误：未知标志 " . implode(' ', $args) . "\n");
+fwrite(STDERR, "运行 'php nurl -h' 查看用法。\n");
+exit(1);
+
+// ═══════════════════════════════════════════════════════════
+// ── 命令实现 ──────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+
+function doNew(KeyStore $ks, array $cfg, bool $longOnly, bool $fullOnly): void
+{
+    if ($longOnly && $fullOnly) {
+        fwrite(STDERR, "错误：-long 和 -full 不能同时使用\n");
+        exit(1);
+    }
+
+    echo "正在生成 API 密钥...\n\n";
+
+    if (!$fullOnly) {
+        $residentKey = $ks->generateResident();
+        echo "━━━ 常驻密钥 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+        echo "  $residentKey\n";
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+        echo "有效期：{$cfg['key_ttl_days']} 天。过期时间：" . formatIso8601(time() + $cfg['key_ttl_days'] * 86400, $cfg['tz_offset']) . "\n\n";
+    }
+
+    if (!$longOnly) {
+        $newKeys = $ks->fillPool();
+        if (count($newKeys) > 0) {
+            echo "━━━ 一次性密钥（新增 " . count($newKeys) . " 个）━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+            foreach ($newKeys as $i => $key) {
+                echo "  " . ($i + 1) . ". $key\n";
+            }
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+            echo "请立即保存所有密钥，之后将不再显示。\n";
+            echo "每个密钥仅可使用一次。使用后会自动生成新密钥。\n";
+            echo "密钥永不过期，直到被使用。\n\n";
+        } else {
+            echo "一次性密钥池已满（{$cfg['onetime_pool_size']}/{$cfg['onetime_pool_size']}）。\n\n";
+        }
+    }
+
+    echo "密钥已存储至：{$cfg['keys_path']}\n";
+}
+
+function doLook(KeyStore $ks, array $cfg): void
+{
+    $status = $ks->status();
+    echo "API 密钥状态\n";
+    echo str_repeat('─', 60) . "\n\n";
+
+    if ($status['resident'] === null) {
+        echo "  常驻密钥：（未设置）\n";
+    } else {
+        $r = $status['resident'];
+        echo "  常驻密钥：\n";
+        echo "    前缀：      {$r['prefix']}\n";
+        echo "    创建时间：  {$r['created']}\n";
+        echo "    过期时间：  {$r['expires']}\n";
+    }
+    echo "\n";
+
+    $count = $status['onetime_count'];
+    $max = $status['onetime_pool_size'];
+    echo "  一次性密钥池：{$count}/{$max} 个密钥\n";
+    if (count($status['onetime_pool']) > 0) {
+        foreach ($status['onetime_pool'] as $i => $o) {
+            echo "    " . ($i + 1) . ". {$o['prefix']}  （创建时间：{$o['created']}）\n";
+        }
+    } else {
+        echo "    （空）\n";
+    }
+    echo "\n";
+}
+
+function doDrop(KeyStore $ks, bool $longOnly, bool $fullOnly): void
+{
+    if ($longOnly && $fullOnly) {
+        fwrite(STDERR, "错误：-long 和 -full 不能同时使用\n");
+        exit(1);
+    }
+
+    $target = 'all';
+    if ($longOnly) $target = 'resident';
+    if ($fullOnly) $target = 'onetime';
+
+    $ks->revoke($target);
+    echo "已撤销：$target\n";
+
+    if ($target === 'all') {
+        echo "所有 API 密钥已被撤销。在生成新密钥之前，请求将返回 406。\n";
+    } elseif ($target === 'resident') {
+        echo "常驻密钥已被撤销。请使用 'php nurl -long' 生成新密钥。\n";
+    } else {
+        echo "所有一次性密钥已被撤销。请使用 'php nurl -full' 补充新密钥。\n";
+    }
+}
+
+function doSweep(array $cfg): void
+{
+    echo "正在清理过期临时短链...\n\n";
+    $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
+    $tempStore->lockBegin();
+    try {
+        $data = $tempStore->readLocked();
+        $before = count($data);
+        cleanExpiredEntries($data);
+        $after = count($data);
+        if ($before === $after) {
+            echo "无需清理，无过期条目。\n";
+        } else {
+            $tempStore->writeLocked($data);
+            echo "已清理 " . ($before - $after) . " 条过期临时短链。\n";
+            echo "剩余：{$after} 条。\n";
+        }
+    } catch (\RuntimeException $e) {
+        $tempStore->lockEnd();
+        fwrite(STDERR, "错误：" . $e->getMessage() . "\n");
+        exit(1);
+    } finally {
+        $tempStore->lockEnd();
+    }
+}
+
+function showHelp(): void
+{
+    echo "nurl — Short_NURL 本地管理工具 v" . NURL_VERSION . "\n\n";
+    echo "用法：php nurl <标志>\n\n";
+    echo "密钥管理：\n";
+    echo "  -new          生成常驻密钥 + 补充一次性密钥池\n";
+    echo "  -long         仅轮换常驻密钥\n";
+    echo "  -full         仅补充一次性密钥池\n";
+    echo "  -look         显示密钥状态（不显示明文）\n";
+    echo "  -drop         撤销所有密钥\n";
+    echo "  -drop -long   仅删除常驻密钥\n";
+    echo "  -drop -full   仅删除所有一次性密钥\n\n";
+    echo "数据维护：\n";
+    echo "  -sweep        清理过期临时短链\n\n";
+    echo "其他：\n";
+    echo "  -v            查看版本\n";
+    echo "  -h / -help    显示此帮助信息\n\n";
+    echo "短链远程操作请使用：php nurl-key\n";
+}

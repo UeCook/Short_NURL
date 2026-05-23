@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark" style="color-scheme: dark; background-color: oklch(0.175 0.015 255);">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>URL 短链管理</title>
+  <!-- Prevent FOUC: theme init before render (external to comply with CSP) -->
+  <script src="frontend/theme-init.js"></script>
+  <meta name="description" content="个人短链服务管理界面">
+  <!-- Basecoat UI CSS -->
+  <link rel="stylesheet" href="frontend/basecoat.min.css">
+  <!-- App custom styles -->
+  <link rel="stylesheet" href="frontend/style.css">
+</head>
+<body>
+  <div class="app-container">
+
+    <!-- ── Header ────────────────────────────────────────── -->
+    <header class="app-header">
+      <div class="app-header-left">
+        <h1 class="app-title">URL 短链</h1>
+      </div>
+      <div class="app-header-right">
+        <!-- Theme toggle button -->
+        <button id="themeToggle" class="theme-toggle btn-icon btn-ghost" type="button" aria-label="切换深色/浅色模式">
+          <!-- Moon icon (shown in light mode) -->
+          <svg class="icon-moon"  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+          <!-- Sun icon (shown in dark mode) -->
+          <svg class="icon-sun"  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ── Main Content ──────────────────────────────────── -->
+    <main class="app-main">
+
+      <!-- ═══ Accordion 1: Create Short URL (default open) ═══ -->
+      <details class="list-details" id="createDetails" open>
+        <summary class="list-summary">
+          <span>创建短链</span>
+          <svg class="list-chevron"  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </summary>
+
+        <section style="padding:0 1.25rem 1.25rem">
+          <form id="createForm" class="create-form">
+
+            <!-- Target URL Field -->
+            <div class="field">
+              <label for="urlInput">目标链接</label>
+              <input
+                type="url"
+                id="urlInput"
+                placeholder="https://example.com/very-long-url"
+                required
+              >
+            </div>
+
+            <!-- TTL / Expiry Field -->
+            <div class="field">
+              <label>有效期</label>
+              <div class="ttl-row">
+                <!-- Toggle Button Group: Permanent / Temporary -->
+                <div class="toggle-group" id="ttlToggleGroup">
+                  <button type="button" class="toggle-btn active" data-value="temp">临时</button>
+                  <button type="button" class="toggle-btn" data-value="perm">永久</button>
+                </div>
+                <div class="ttl-controls" id="ttlControls">
+                  <select id="ttlPreset" title="选择有效期预设">
+                    <option value="1800">30 分钟</option>
+                    <option value="3600">1 小时</option>
+                    <option value="21600">6 小时</option>
+                    <option value="43200">12 小时</option>
+                    <option value="86400">1 天</option>
+                    <option value="604800" selected>7 天</option>
+                    <option value="2592000">30 天</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                  <div class="ttl-custom" id="ttlCustom" style="display:none">
+                    <input type="datetime-local" id="ttlDatetime">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Custom Code Field -->
+            <div class="field">
+              <label for="codeInput">自定义后缀（选填）</label>
+              <input
+                type="text"
+                id="codeInput"
+                placeholder="留空自动生成，支持 1~4 位小写字母、数字和 - "
+                maxlength="4"
+                pattern="[0-9a-zA-Z-]{1,4}"
+              >
+            </div>
+
+            <!-- API Key for Create -->
+            <div class="field">
+              <label for="createKeyInput">API Key</label>
+              <input
+                type="password"
+                id="createKeyInput"
+                placeholder="su_xK9mP2qR…"
+                autocomplete="off"
+                spellcheck="false"
+              >
+            </div>
+
+            <!-- Submit Action -->
+            <div class="create-actions">
+              <button type="submit" id="createBtn" class="btn btn-primary">创建短链</button>
+            </div>
+          </form>
+
+          <!-- Success View (shown after successful creation) -->
+          <div id="successView" class="success-view">
+            <div class="success-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+            </div>
+            <div class="success-title">短链创建成功</div>
+            <div class="success-link-card">
+              <span class="success-url" id="successUrl"></span>
+              <span class="success-exp" id="successExp"></span>
+            </div>
+            <div class="success-actions">
+              <button type="button" id="successCopyBtn" class="btn btn-primary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                复制链接
+              </button>
+              <button type="button" id="continueCreateBtn" class="btn btn-outline">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+                继续创建
+              </button>
+            </div>
+          </div>
+
+          <!-- Result Display (legacy, kept for compatibility) -->
+          <div id="resultBox" class="result-box">
+            <span class="result-url" id="resultUrl"></span>
+            <span class="result-exp" id="resultExp"></span>
+            <button type="button" id="copyResultBtn" class="btn btn-sm btn-outline">
+              <svg  width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+        </section>
+      </details>
+
+      <!-- ═══ Accordion 2: Manage Short URLs ═══ -->
+      <details class="list-details" id="manageDetails">
+        <summary class="list-summary">
+          <span>短链管理</span>
+          <svg class="list-chevron"  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </summary>
+
+        <section style="padding:0 1.25rem 1.25rem; display:flex; flex-direction:column; gap:1.25rem">
+
+          <!-- API Key Input for Management -->
+          <div class="field">
+            <label for="manageKeyInput">API Key</label>
+          <div class="key-confirm-row">
+              <input
+                type="password"
+                id="manageKeyInput"
+                placeholder="su_xK9mP2qR…"
+                autocomplete="off"
+                spellcheck="false"
+              >
+              <button type="button" id="manageConfirmBtn" class="btn btn-primary btn-sm">确认</button>
+            </div>
+          </div>
+          <div class="stats-bar" id="manageStatsBar" style="display:none">
+            <span id="listBadge" class="list-badge"></span>
+            <div class="stat-cards-row">
+              <div class="stat-card">
+                <span class="stat-label">永久短链</span>
+                <span class="stat-value" id="statPermValue">—</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">临时短链</span>
+                <span class="stat-value" id="statTempValue">—</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tabbed List -->
+          <div class="tabs list-tabs" id="manageListTabs" style="display:none">
+            <div role="tablist">
+              <button role="tab" data-tab="permanent" aria-selected="true">永久短链</button>
+              <button role="tab" data-tab="temporary" aria-selected="false">临时短链</button>
+            </div>
+
+            <!-- Permanent List Panel -->
+            <div role="tabpanel" data-tabpanel="permanent" id="permList">
+              <div class="url-list-empty">请输入 API Key 后查看列表</div>
+            </div>
+
+            <!-- Temporary List Panel -->
+            <div role="tabpanel" data-tabpanel="temporary" id="tempList" style="display:none">
+              <div class="url-list-empty">请输入 API Key 后查看列表</div>
+            </div>
+          </div>
+
+        </section>
+      </details>
+
+    </main>
+
+    <!-- ── Footer ────────────────────────────────────────── -->
+    <footer class="site-footer">
+      <a href="https://beian.miit.gov.cn/#/Integrated/index" target="_blank" rel="noopener noreferrer">
+        桂ICP备2025068637号-2
+      </a>
+      <a href="http://www.beian.gov.cn/portal/registerSystemInfo?recordcode=45100202000462" target="_blank" rel="noopener noreferrer">
+        <img src="frontend/beian.avif" alt="公安备案">
+        桂公网安备45100202000466号
+      </a>
+    </footer>
+
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toaster" class="app-toaster"></div>
+
+  <!-- Basecoat UI JS -->
+  <script src="frontend/basecoat.min.js"></script>
+  <!-- App Logic -->
+  <script src="frontend/app.js"></script>
+</body>
+</html>
