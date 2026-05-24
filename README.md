@@ -42,7 +42,7 @@ It uses **OpenResty** to handle short URL redirections and **PHP-FPM** to handle
 * **Secure Write Mechanism**: JSON writes support file locking, temporary files, atomic `rename()`, backups, verification, and rollbacks.
 * **Permanent / Temporary Links**: Supports permanent short links as well as temporary short links with a TTL.
 * **Custom Short Codes**: Supports 1–4 character custom short codes, automatically converted to lowercase, featuring reserved words and conflict detection.
-* **Dual-Mode Keys**: Supports persistent keys, one-time keys, and independent Ping keys.
+* **Dual-Mode Keys**: Supports persistent keys, one-time keys.
 * **Standard API + Headless API**: Can be called by browser frontends or utilized in scripts, backends, and CLI scenarios.
 * **CLI Tools**: Provides local key management, cold storage cleanup, remote short link management, and more.
 * **Docker / 1Panel Friendly**: Provides native Docker and 1Panel deployment instructions.
@@ -225,7 +225,7 @@ Copyright 2026 Uecook / 圣堂之魂
 - **安全写入机制**：JSON 写入支持文件锁、临时文件、原子 rename、备份、验证和回滚。
 - **永久链 / 临时链**：支持永久短链和带 TTL 的临时短链。
 - **自定义短码**：支持 1～4 位自定义短码，自动转小写，并包含保留词和冲突检测。
-- **双模式 Key**：支持常驻 Key、一次性 Key，以及独立 Ping Key。
+- **双模式 Key**：支持常驻 Key、一次性 Key。
 - **标准 API + 无头 API**：既可供浏览器前端调用，也可用于脚本、后端或 CLI 场景。
 - **CLI 工具**：提供本地密钥管理、冷存储清理、远程短链管理等能力。
 - **Docker / 1Panel 友好**：提供原生 Docker 与 1Panel 部署说明。
