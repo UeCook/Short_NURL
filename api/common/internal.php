@@ -50,18 +50,11 @@ function internalStat($cfg) {
     $timeout = $cfg['internal_timeout'];
     $url = $host . '/internal/stat';
 
-    // 构建带认证的请求头
-    $headers = [];
-    if (!empty($cfg['internal_token'])) {
-        $headers[] = 'X-Internal-Token: ' . $cfg['internal_token'];
-    }
-
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => $timeout,
         CURLOPT_CONNECTTIMEOUT => $timeout,
-        CURLOPT_HTTPHEADER => $headers,
     ]);
     $resp = curl_exec($ch);
     $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -101,17 +94,11 @@ function internalPost($cfg, $path, $params = []) {
     $timeout = $cfg['internal_timeout'];
     $url = $host . $path;
 
-    // 构建带认证的请求头
-    $headers = ['Content-Type: application/json'];
-    if (!empty($cfg['internal_token'])) {
-        $headers[] = 'X-Internal-Token: ' . $cfg['internal_token'];
-    }
-
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => json_encode($params),
-        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => $timeout,
         CURLOPT_CONNECTTIMEOUT => $timeout,
