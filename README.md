@@ -109,7 +109,7 @@ Therefore, cold storage remains the authoritative data source of the system at a
 | `GET`  | `/api/list`   | Query all short URLs          |
 | `GET`  | `/api/stat`   | Query statistical information |
 
-Standard APIs are designed for browser frontends and support CORS. The keys for `create` / `delete` are placed in the request body JSON, keys for `list` / `stat` are placed in the `X-Token` header, and `ping` uses an independent `X-Ping-Key`.
+Standard APIs are designed for browser frontends and support CORS. The keys for `create` / `delete` are placed in the request body JSON, keys for `list` / `stat` are placed in the `X-Token` header.
 
 ### 2. Headless API
 
@@ -291,7 +291,7 @@ Short_NURL 使用两类数据文件：
 | `GET` | `/api/list` | 查询全部短链 |
 | `GET` | `/api/stat` | 查询统计信息 |
 
-标准 API 面向浏览器前端，支持 CORS。`create` / `delete` 的 Key 放在请求体 JSON 中，`list` / `stat` 的 Key 放在 `X-Token` 请求头中，`ping` 使用独立的 `X-Ping-Key`。
+标准 API 面向浏览器前端，支持 CORS。`create` / `delete` 的 Key 放在请求体 JSON 中，`list` / `stat` 的 Key 放在 `X-Token` 请求头中。
 
 ### 2.无头 API
 
