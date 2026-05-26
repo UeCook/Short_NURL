@@ -98,15 +98,27 @@ if ($errorResponse) {
 // @外调用_&11：internalSet — 写入热存储（通知 OpenResty 更新共享内存）
 $synced = internalSet($cfg, $code, $url, $isTemp ? $ttl : 0, $exp_str);
 if (!$synced) {
-    error_log("[headless_create] 热存储同步失败：code={$code}，请检查 internal_host 配置和 OpenResty 连通性");
+    $detail = getLastInternalError();
+    $diagMsg = $detail ? $detail['message'] : '未知错误';
+    error_log("[headless_create] 热存储同步失败：code={$code}，原因：{$diagMsg}");
 }
-http_response_code(201);
+
 if (!$synced) {
-    $resp = ['short_url' => $shortUrl, 'synced' => false, 'warning' => '热存储同步失败，短链暂不可用。请检查 OpenResty 内部接口连通性。'];
+    // 冷存储已写入但热存储同步失败 — 返回 HTTP 207 (Multi-Status)
+    $detail = getLastInternalError();
+    http_response_code(207);
+    $resp = [
+        'short_url' => $shortUrl,
+        'synced' => false,
+        'warning' => '热存储同步失败：短链已保存但暂不可用。' . ($detail ? $detail['message'] : '请检查 OpenResty 内部接口连通性。'),
+    ];
     if ($isTemp) $resp['exp'] = $exp_str;
     echo json_encode($resp);
-} elseif ($isTemp) {
-    echo json_encode(['short_url'=>$shortUrl,'exp'=>$exp_str]);
 } else {
-    echo json_encode(['short_url'=>$shortUrl]);
+    http_response_code(201);
+    if ($isTemp) {
+        echo json_encode(['short_url'=>$shortUrl,'exp'=>$exp_str]);
+    } else {
+        echo json_encode(['short_url'=>$shortUrl]);
+    }
 }

@@ -3,6 +3,21 @@
 
 local M = {}
 
+--- Get the local system timezone offset in seconds (cached)
+-- Uses os.date("!*t") vs os.date("*t") to compute the difference.
+-- Cached after first call since timezone doesn't change during process lifetime.
+-- @return number  offset in seconds (e.g. 28800 for UTC+8)
+local function get_local_tz_offset()
+    if M._tz_offset then return M._tz_offset end
+    local now = os.time()
+    local utc_t = os.date("!*t", now)
+    local local_t = os.date("*t", now)
+    utc_t.isdst = false
+    local_t.isdst = false
+    M._tz_offset = os.difftime(os.time(local_t), os.time(utc_t))
+    return M._tz_offset
+end
+
 --- Format a unix timestamp to ISO 8601 string with timezone offset
 -- @param ts   number  unix timestamp (seconds)
 -- @param tz   string  timezone offset e.g. "+08:00"
@@ -31,17 +46,12 @@ function M.now_iso8601(tz)
     return M.format_iso8601(ngx.time(), tz)
 end
 
---- Parse ISO 8601 string to unix timestamp
+--- Parse ISO 8601 string to unix timestamp (UTC epoch)
 -- @param s    string  ISO 8601 string e.g. "2025-06-17T08:00:00+08:00"
--- @return     number  unix timestamp, or nil on failure
+-- @return     number  unix timestamp (UTC), or nil on failure
 --
--- WARNING: os.time() interprets its argument as local time, not UTC.
--- On servers with non-UTC system timezone (e.g. Asia/Shanghai), the returned
--- epoch will be offset by the local timezone difference. This is currently
--- harmless because expire_sweep uses string comparison, not this function.
--- If future code depends on accurate epoch values, either:
---   1. Set server TZ to UTC (export TZ=UTC), or
---   2. Compensate with local_tz_offset() subtraction.
+-- Note: os.time() interprets its argument as local time, not UTC.
+-- We compensate by computing the local timezone offset and adjusting.
 function M.parse_iso8601(s)
     if not s or s == "0" then return nil end
 
@@ -49,15 +59,16 @@ function M.parse_iso8601(s)
         s:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)([+-])(%d%d):(%d%d)$")
     if not year then return nil end
 
-    -- Convert to epoch using os.time in UTC
-    local utc_time = {
+    -- Build time table from the ISO string components
+    local time_table = {
         year = tonumber(year), month = tonumber(month), day = tonumber(day),
         hour = tonumber(hour), min = tonumber(min), sec = tonumber(sec),
         isdst = false
     }
-    local epoch = os.time(utc_time)
+    -- os.time() interprets this as local time; compensate to get UTC epoch
+    local epoch = os.time(time_table) + get_local_tz_offset()
 
-    -- Apply timezone offset
+    -- Apply the timezone offset from the ISO string to convert to UTC
     local offset = tonumber(oh) * 3600 + tonumber(om) * 60
     if sign == "+" then epoch = epoch - offset
     else epoch = epoch + offset end
