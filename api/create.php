@@ -54,6 +54,24 @@ $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
 
 $code = isset($input['code']) ? trim($input['code']) : '';
 $isCustom = !empty($code);
+
+// ── 永久链去重（写入前查冷存储，URL 完全匹配则复用）──
+// @关键_$29：永久链去重 — ttl==0 且未传自定义短码时遍历 perm.json，URL 严格匹配则返回已有短码
+// 传了自定义短码说明用户有明确意图，去重不干预
+if (!$isTemp && !$isCustom) {
+    $permData = $permStore->read();
+    foreach ($permData as $existing) {
+        if (isset($existing['url']) && $existing['url'] === $url) {
+            http_response_code(200);
+            echo json_encode([
+                'short_url' => $existing['lurl'],
+                'dedup'     => true,
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+    }
+}
+
 if ($isCustom) {
     $code = strtolower($code);
     if (!preg_match('/^[0-9a-z-]{1,4}$/', $code)) { http_response_code(400); echo json_encode(['error'=>'后缀格式错误'], JSON_UNESCAPED_UNICODE); exit; }
