@@ -11,7 +11,7 @@
 
 ---
 
-文档地址（docs）：[https://uoca.top/04](https://uoca.top/docs/04/01)
+文档地址（docs）：[https://uoca.top/04](https://uoca.top/docs/100/01)
 
 演示地址（demo）：[https://r.uoca.top](https://r.uoca.top)
 
