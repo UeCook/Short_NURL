@@ -6,6 +6,7 @@
  * 换哈希算法时改 auth_hash.php 即可，此处不动。
  */
 require_once __DIR__ . '/auth_hash.php';
+require_once __DIR__ . '/base58.php';
 
 /**
  * 两种 Key 类型：
@@ -14,7 +15,7 @@ require_once __DIR__ . '/auth_hash.php';
  *     使用后自动销毁（不自动补充，需 CLI 手动补充）
  *
  * 写入保护（v2.1 safe_write 规范）：
- *   所有写入操作（writeFile / writeLockedFile）均包含备份 + 验证 + 回滚三层保护
+ *   所有写入操作（writeLockedFile）均包含备份 + 验证 + 回滚三层保护
  *
  * keys.json 结构：
  * {
@@ -45,18 +46,28 @@ class KeyStore {
     private $tz_offset;
     private $ttlDays;
     private $poolSize;
-    private $keyCharset;
-    private $keyLength;
 
-    public function __construct($path, $tz_offset = '+08:00', $ttlDays = 7, $poolSize = 20, $keyCharset = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', $keyLength = 64) {
+    public function __construct($path, $tz_offset = '+08:00', $ttlDays = 7, $poolSize = 20) {
         $dir = dirname($path);
         if (!is_dir($dir)) mkdir($dir, 0755, true);
         $this->path = $path;
         $this->tz_offset = $tz_offset;
         $this->ttlDays = $ttlDays;
         $this->poolSize = $poolSize;
-        $this->keyCharset = $keyCharset;
-        $this->keyLength = $keyLength;
+    }
+
+    /**
+     * 生成原始密钥：32 字节随机数 → Base58 编码 → 添加 su_ 前缀
+     * Base58 编码将 32 字节压缩为约 44 个字符（相比十六进制的 64 字符更短）
+     *
+     * @return string  完整明文密钥（su_ + base58 编码）
+     */
+// @关键_$35：generateRawKey — 生成原始密钥（32 字节随机数 → Base58 编码 → su_ 前缀）
+    private function generateRawKey() {
+        $bytes = random_bytes(32);
+        // @外调用_&15：base58_encode — Base58 编码（generateRawKey 内，将 32 字节随机数编码为 Base58）
+        $encoded = base58_encode($bytes);
+        return 'su_' . $encoded;
     }
 
     // ── 文件读写 ───────────────────────────────────────
@@ -69,43 +80,13 @@ class KeyStore {
         $raw = file_get_contents($this->path);
         $data = json_decode($raw, true);
         if (!is_array($data)) {
+            error_log("[key_readFile] keys.json 解码失败，内容可能损坏: " . $this->path);
             return ['resident' => null, 'onetime_pool' => []];
         }
         if (!isset($data['onetime_pool']) || !is_array($data['onetime_pool'])) {
             $data['onetime_pool'] = [];
         }
         return $data;
-    }
-
-// @关键_$5：writeFile — 安全写入 keys.json 文件（备份 + .php.tmp + rename + 验证 + 回滚）
-    private function writeFile(array $data) {
-        $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        $bak = $this->path . '.bak';
-        $tmp = $this->path . '.php.tmp';
-
-        // 1. 备份当前文件
-        if (file_exists($this->path)) {
-            if (!copy($this->path, $bak)) {
-                throw new \RuntimeException("备份失败：$bak");
-            }
-        }
-
-        // 2. 原子写入
-        file_put_contents($tmp, $json, LOCK_EX);
-        if (!rename($tmp, $this->path)) {
-            @unlink($tmp);
-            throw new \RuntimeException("rename 失败：$tmp → {$this->path}");
-        }
-
-        // 3. 验证写入完整性
-        $verify = @file_get_contents($this->path);
-        if ($verify === false || json_decode($verify, true) === null) {
-            if (file_exists($bak) && @copy($bak, $this->path)) {
-                throw new \RuntimeException("写入验证失败，已回滚：{$this->path}");
-            }
-            error_log("[safe_write] 写入验证失败且回滚失败：{$this->path}");
-            throw new \RuntimeException("写入验证失败且回滚失败，请检查磁盘：{$this->path}");
-        }
     }
 
 // @关键_$6：writeLockedFile — 在持有文件锁状态下安全写入 keys 数据（备份 + 写入 + 验证 + 回滚）
@@ -169,7 +150,8 @@ class KeyStore {
             $raw = stream_get_contents($fp);
             $keys = json_decode($raw, true);
             if (!is_array($keys)) {
-                $keys = ['resident' => null, 'onetime_pool' => []];
+                error_log("[key_verify] keys.json 解码失败，内容可能损坏，路径: {$this->path}");
+                return false;
             }
             if (!isset($keys['onetime_pool']) || !is_array($keys['onetime_pool'])) {
                 $keys['onetime_pool'] = [];
@@ -209,35 +191,6 @@ class KeyStore {
         }
     }
 
-    /**
-     * 生成一个一次性 Key 条目（返回明文 + 追加到池数组）
-     * 内部使用，用于自动补充
-     */
-// @关键_$8：appendToPool — 向一次性 Key 池追加新 Key 条目
-    private function appendToPool(&$pool) {
-        if (count($pool) >= $this->poolSize) return null;
-
-        $charsetLen = strlen($this->keyCharset) - 1;
-        $raw = 'su_';
-        for ($i = 0; $i < $this->keyLength; $i++) {
-            $raw .= $this->keyCharset[random_int(0, $charsetLen)];
-        }
-
-        // @外调用_&8：auth_hash — 哈希运算（appendToPool 内，换算法改 auth_hash.php）
-        $hash = auth_hash($raw);
-        $prefix = substr($raw, 0, 8);
-        $now = time();
-        $created = formatIso8601($now, $this->tz_offset);
-
-        $pool[] = [
-            'key_hash'   => $hash,
-            'key_prefix' => $prefix,
-            'created'    => $created,
-        ];
-
-        return $raw;
-    }
-
     // ── 通用锁内执行 ────────────────────────────────────
 
     /**
@@ -261,7 +214,8 @@ class KeyStore {
             $raw = stream_get_contents($fp);
             $data = json_decode($raw, true);
             if (!is_array($data)) {
-                $data = ['resident' => null, 'onetime_pool' => []];
+                error_log("[key_withLock] keys.json 解码失败，内容可能损坏，路径: {$this->path}");
+                throw new \RuntimeException("keys.json 数据损坏，请手动检查: " . $this->path);
             }
             if (!isset($data['onetime_pool']) || !is_array($data['onetime_pool'])) {
                 $data['onetime_pool'] = [];
@@ -284,11 +238,8 @@ class KeyStore {
 // @关键_$9：generateResident — 生成新的常驻 Key（返回明文，仅此一次显示）
     public function generateResident() {
         return $this->withLock(function(&$data, $fp) {
-            $charsetLen = strlen($this->keyCharset) - 1;
-            $raw = 'su_';
-            for ($i = 0; $i < $this->keyLength; $i++) {
-                $raw .= $this->keyCharset[random_int(0, $charsetLen)];
-            }
+            // @外调用_&16：generateRawKey — 密钥生成（generateResident 内，Base58 编码）
+            $raw = $this->generateRawKey();
 
             // @外调用_&8：auth_hash — 哈希运算（generateResident 内，换算法改 auth_hash.php）
             $hash = auth_hash($raw);
@@ -320,11 +271,8 @@ class KeyStore {
             $newKeys = [];
 
             while (count($pool) < $this->poolSize) {
-                $charsetLen = strlen($this->keyCharset) - 1;
-                $raw = 'su_';
-                for ($i = 0; $i < $this->keyLength; $i++) {
-                    $raw .= $this->keyCharset[random_int(0, $charsetLen)];
-                }
+                // @外调用_&16：generateRawKey — 密钥生成（fillPool 内，Base58 编码）
+                $raw = $this->generateRawKey();
 
                 // @外调用_&8：auth_hash — 哈希运算（fillPool 内，换算法改 auth_hash.php）
                 $hash = auth_hash($raw);
@@ -359,6 +307,8 @@ class KeyStore {
                 $data['resident'] = null;
             } elseif ($type === 'onetime') {
                 $data['onetime_pool'] = [];
+            } else {
+                throw new \InvalidArgumentException("无效的吊销类型: {$type}");
             }
             $this->writeLockedFile($fp, $data);
         });

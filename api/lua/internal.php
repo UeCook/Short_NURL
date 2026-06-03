@@ -41,14 +41,17 @@ function internalSet($cfg, $code, $url, $ttl, $exp_str) {
  * 删除热存储 — POST /internal/delete
  * @param array  $cfg   配置数组
  * @param string $code  要删除的短码
+ * @param string $type  短链类型：'temp' 或 'perm'（由 PHP 从冷存储确定，传递给 Lua 精准递减）
  * @return array|null
  */
 // @外调用入口_%2：internalDelete — 删除热存储（调用 OpenResty POST /internal/delete）
-function internalDelete($cfg, $code) {
+function internalDelete($cfg, $code, $type = '') {
+    $params = ['code' => $code];
+    if ($type !== '') {
+        $params['type'] = $type;
+    }
     // @外调用_&2：internalPost — 向 OpenResty 内部 API 发送 POST 请求
-    return internalPost($cfg, '/internal/delete', [
-        'code' => $code,
-    ]);
+    return internalPost($cfg, '/internal/delete', $params);
 }
 
 /**
@@ -58,6 +61,9 @@ function internalDelete($cfg, $code) {
  */
 // @外调用入口_%3：internalStat — 读取热存储计数（调用 OpenResty GET /internal/stat）
 function internalStat($cfg) {
+    global $_lastInternalError;
+    $_lastInternalError = null;
+
     $host = $cfg['internal_host'];
     $timeout = $cfg['internal_timeout'];
     $url = $host . '/internal/stat';
@@ -75,6 +81,7 @@ function internalStat($cfg) {
     curl_close($ch);
 
     if ($err) {
+        $_lastInternalError = ['type' => 'curl', 'message' => "cURL 错误：{$err}", 'http_code' => 0];
         error_log("[internal_stat] cURL 错误：{$err} ({$url})");
         return null;
     }
@@ -82,13 +89,18 @@ function internalStat($cfg) {
         // 注意：必须使用 === false 而非 !strpos()，因为 strpos 可能返回 0（位置在开头）
         // 例如 "application/json; charset=utf-8" 会返回 0，!strpos 会误判为 false
         if ($contentType && strpos($contentType, 'application/json') === false) {
+            $_lastInternalError = ['type' => 'content_type', 'message' => "非 JSON 响应：{$contentType}", 'http_code' => $code];
             error_log("[internal_stat] 非 JSON 响应：{$contentType} ({$url})");
             return null;
         }
         $d = json_decode($resp, true);
-        if (json_last_error() !== JSON_ERROR_NONE) return null;
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $_lastInternalError = ['type' => 'json', 'message' => '响应 JSON 解析失败：' . json_last_error_msg(), 'http_code' => $code];
+            return null;
+        }
         return is_array($d) ? $d : null;
     }
+    $_lastInternalError = ['type' => 'http', 'message' => "HTTP {$code}", 'http_code' => $code];
     error_log("[internal_stat] 非 200 响应：HTTP {$code} ({$url})");
     return null;
 }

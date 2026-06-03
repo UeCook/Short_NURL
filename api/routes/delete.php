@@ -55,7 +55,6 @@ if ($isTemp) {
         $tempData = $tempStore->readLocked();
         // 锁内重新检查存在性（防止并发删除时两个请求都通过 404 检查）
         if (!isset($tempData[$code])) {
-            $tempStore->lockEnd();
             http_response_code(404);
             echo json_encode(['error' => '该短链不存在'], JSON_UNESCAPED_UNICODE);
             exit;
@@ -76,7 +75,6 @@ if ($isTemp) {
         $permData = $permStore->readLocked();
         // 锁内重新检查存在性（防止并发删除时两个请求都通过 404 检查）
         if (!isset($permData[$code])) {
-            $permStore->lockEnd();
             http_response_code(404);
             echo json_encode(['error' => '该短链不存在'], JSON_UNESCAPED_UNICODE);
             exit;
@@ -93,7 +91,19 @@ if ($isTemp) {
 
 // ── 冷存储删除成功，同步删除热存储 ─────────────────────
 // @外调用_&10：internalDelete — 前端删除接口清除热存储
-internalDelete($cfg, $code);
+// 传递短链类型（由冷存储查找确定），让 Lua 精准递减对应计数器
+$typeHint = $isTemp ? 'temp' : 'perm';
+$delResult = internalDelete($cfg, $code, $typeHint);
+
+if ($delResult === null) {
+    $lastErr = getLastInternalError();
+    error_log("[delete] 热存储同步失败: code={$code}, type={$typeHint}, " .
+        ($lastErr ? json_encode($lastErr, JSON_UNESCAPED_UNICODE) : 'unknown'));
+    // 不回滚冷存储（已成功删除），但标记同步状态
+}
 
 // ── 返回结果 ─────────────────────────────────────────
-echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
+echo json_encode([
+    'ok'     => true,
+    'synced' => ($delResult !== null),
+], JSON_UNESCAPED_UNICODE);

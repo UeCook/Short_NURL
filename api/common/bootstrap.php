@@ -45,25 +45,7 @@ foreach ($checkFiles as $f) {
     }
 }
 
-/**
- * 获取全局配置的 KeyStore 实例
- */
-// @关键_$23：getKeyStore — 获取全局 KeyStore 单例（延迟初始化）
-function getKeyStore() {
-    global $cfg;
-    static $instance = null;
-    if ($instance === null) {
-        $instance = new KeyStore(
-            $cfg['keys_path'],
-            $cfg['tz_offset'],
-            $cfg['key_ttl_days'],
-            $cfg['onetime_pool_size'],
-            $cfg['key_charset'],
-            $cfg['key_length']
-        );
-    }
-    return $instance;
-}
+// getKeyStore() 已提取至 helpers.php，由 function_exists 守卫防止重复定义
 
 // ── 认证解析（公共化，所有 api 接口共享）──────────────
 // php://input 只能读一次，提前缓存供 auth_extract 和业务文件使用

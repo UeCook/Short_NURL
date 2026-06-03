@@ -81,6 +81,7 @@ $store->lockBegin();
 $errorResponse = null;
 try {
     $data = $store->readLocked();
+    if ($isTemp) cleanExpiredEntries($data);
     if ($isCustom) {
         if (isset($data[$code])) { $errorResponse = [409, '已占用']; }
         // 设计决策：跨 store 检查（$otherStore->find）存在极小概率竞态窗口，
@@ -108,7 +109,6 @@ try {
         }
     }
     if (!$errorResponse) {
-        if ($isTemp) cleanExpiredEntries($data);
         $activeCount = 0;
         foreach ($data as $item) { if (!isExpired($item['t'] ?? null)) $activeCount++; }
         $limit = $cfg[$isTemp ? 'temp_limit' : 'perm_limit'];

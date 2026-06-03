@@ -11,9 +11,13 @@
  * @param int $ts     Unix 时间戳
  * @param string $tz  时区偏移（ISO 8601 格式，如 '+08:00'）
  * @return string     ISO 8601 格式的日期时间字符串
+ * @throws \InvalidArgumentException  时区偏移格式无效时抛出
  */
 // @关键_$1：formatIso8601 — 将 Unix 时间戳格式化为带时区偏移的 ISO 8601 字符串
 function formatIso8601($ts, $tz) {
+    if (!preg_match('/^[+-]\d{2}:\d{2}$/', $tz)) {
+        throw new \InvalidArgumentException("无效时区偏移格式: {$tz}");
+    }
     $sign = $tz[0];
     $parts = explode(':', substr($tz, 1));
     $offsetSec = intval($parts[0]) * 3600 + intval($parts[1]) * 60;
@@ -84,4 +88,26 @@ function cleanExpiredEntries(&$data) {
         }
     }
     return $removed;
+}
+
+/**
+ * 获取全局配置的 KeyStore 单例（延迟初始化）
+ * 提取自 api/common/bootstrap.php 和 headless/bootstrap.php，
+ * 避免两处维护完全相同的函数定义。
+ */
+// @关键_$23/$25：getKeyStore — 获取全局 KeyStore 单例（延迟初始化，4 参数：path/tz/ttl/pool）
+if (!function_exists('getKeyStore')) {
+    function getKeyStore() {
+        global $cfg;
+        static $instance = null;
+        if ($instance === null) {
+            $instance = new KeyStore(
+                $cfg['keys_path'],
+                $cfg['tz_offset'],
+                $cfg['key_ttl_days'],
+                $cfg['onetime_pool_size']
+            );
+        }
+        return $instance;
+    }
 }

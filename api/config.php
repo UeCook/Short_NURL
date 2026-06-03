@@ -15,8 +15,6 @@ return [
     'keys_path'        => __DIR__ . '/../backend/data/keys.json',                            // Key 存储文件
     'key_ttl_days'     => 7,                                                                 // 常驻 Key 有效期（天）
     'onetime_pool_size' => 20,                                                               // 一次性 Key 池大小
-    'key_charset'      => '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',  // Key 字符集，无需修改
-    'key_length'       => 64,                                                                // Key 长度，无需修改
 
     // 数量限制，本服务最大上限均为 9999
     'perm_limit'       => 9999, // 永久短链

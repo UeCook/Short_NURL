@@ -47,6 +47,8 @@ class JsonStore {
         $raw = file_get_contents($this->path);
         $data = json_decode($raw, true);
         if (!is_array($data) || !isset($data['d']) || !is_array($data['d'])) {
+            // 文件存在但内容损坏，记录日志（read 不抛异常，因为不直接触发写入）
+            error_log("[json_store] JSON 损坏，路径: {$this->path}");
             return [];
         }
         return $data['d'];
@@ -79,7 +81,11 @@ class JsonStore {
         }
 
         // 2. 原子写入（.php.tmp + rename）
-        file_put_contents($tmp, $json, LOCK_EX);
+        $written = file_put_contents($tmp, $json, LOCK_EX);
+        if ($written === false) {
+            @unlink($tmp);
+            throw new \RuntimeException("写入临时文件失败：$tmp");
+        }
         if (!rename($tmp, $this->path)) {
             @unlink($tmp);
             throw new \RuntimeException("rename 失败：$tmp → {$this->path}");
@@ -177,9 +183,14 @@ class JsonStore {
         }
         fseek($this->lockFp, 0);
         $raw = stream_get_contents($this->lockFp);
+        // 空文件 = 首次部署，合理返回空
+        if (empty($raw) || trim($raw) === '') {
+            return [];
+        }
         $data = json_decode($raw, true);
         if (!is_array($data) || !isset($data['d']) || !is_array($data['d'])) {
-            return [];
+            error_log("[json_store] JSON 损坏，路径: {$this->path}");
+            throw new \RuntimeException("数据文件 JSON 损坏: " . $this->path);
         }
         return $data['d'];
     }
