@@ -214,8 +214,13 @@ class KeyStore {
             $raw = stream_get_contents($fp);
             $data = json_decode($raw, true);
             if (!is_array($data)) {
-                error_log("[key_withLock] keys.json 解码失败，内容可能损坏，路径: {$this->path}");
-                throw new \RuntimeException("keys.json 数据损坏，请手动检查: " . $this->path);
+                if ($raw === false || $raw === '' || $raw === null) {
+                    // 文件为空或不存在（首次运行），使用默认空结构
+                    $data = ['resident' => null, 'onetime_pool' => []];
+                } else {
+                    error_log("[key_withLock] keys.json 解码失败，内容可能损坏，路径: {$this->path}");
+                    throw new \RuntimeException("keys.json 数据损坏，请手动检查: " . $this->path);
+                }
             }
             if (!isset($data['onetime_pool']) || !is_array($data['onetime_pool'])) {
                 $data['onetime_pool'] = [];
