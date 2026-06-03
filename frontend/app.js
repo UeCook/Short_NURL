@@ -56,7 +56,7 @@
       setTimeout(function () {
         if (toast.parentNode) toast.parentNode.removeChild(toast);
       }, 220);
-    }, 3500);
+    }, 10000);
   }
 
   /* ── 确认对话框 ────────────────────────────────────────── */
@@ -244,8 +244,14 @@
 
     apiPost("/create", body)
       .then(function (data) {
-        showToast("短链创建成功");
-        showSuccessView(data.short_url, data.exp || null);
+        if (data.synced === false) {
+          // 热存储同步失败 — 短链已保存但暂不可用
+          showToast(data.error || "热存储同步失败，短链暂不可用", "error");
+          showSuccessView(data.short_url, data.exp || null);
+        } else {
+          showToast("短链创建成功");
+          showSuccessView(data.short_url, data.exp || null);
+        }
         $("#urlInput").value = "";
         $("#codeInput").value = "";
       })
@@ -483,9 +489,150 @@
     } catch (e) { return isoStr; }
   }
 
+  /* ── 自定义覆盖式滚动条 ─────────────────────────────── */
+  function initCustomScrollbar() {
+    var track = document.createElement("div");
+    track.className = "sb-track";
+    var thumb = document.createElement("div");
+    thumb.className = "sb-thumb";
+    track.appendChild(thumb);
+    document.body.appendChild(track);
+
+    var hideTimer = null;
+
+    function show() {
+      track.classList.add("show");
+      clearTimeout(hideTimer);
+    }
+
+    function scheduleHide() {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(function () {
+        track.classList.remove("show");
+      }, 900);
+    }
+
+    function update() {
+      var el = document.documentElement;
+      var scrollH = el.scrollHeight;
+      var clientH = el.clientHeight;
+      if (scrollH <= clientH) {
+        track.classList.remove("show");
+        thumb.style.height = "0px";
+        return;
+      }
+      var ratio = clientH / scrollH;
+      var thumbH = Math.max(30, clientH * ratio);
+      var scrollTop = el.scrollTop;
+      var maxTop = clientH - thumbH;
+      var top = maxTop > 0 ? (scrollTop / (scrollH - clientH)) * maxTop : 0;
+
+      thumb.style.height = thumbH + "px";
+      thumb.style.transform = "translateY(" + top + "px)";
+    }
+
+    window.addEventListener("scroll", function () {
+      show();
+      update();
+      scheduleHide();
+    }, { passive: true });
+
+    window.addEventListener("resize", update);
+
+    // 拖拽
+    var dragging = false;
+    var startY = 0;
+    var startScroll = 0;
+    var cachedScrollH = 0;
+    var cachedClientH = 0;
+    var cachedThumbH = 0;
+
+    thumb.addEventListener("mousedown", function (e) {
+      e.preventDefault();
+      dragging = true;
+      startY = e.clientY;
+      startScroll = document.documentElement.scrollTop;
+      cachedScrollH = document.documentElement.scrollHeight;
+      cachedClientH = document.documentElement.clientHeight;
+      cachedThumbH = Math.max(30, cachedClientH * (cachedClientH / cachedScrollH));
+      thumb.classList.add("active");
+      document.body.style.userSelect = "none";
+      document.body.style.webkitUserSelect = "none";
+    });
+
+    document.addEventListener("mousemove", function (e) {
+      if (!dragging) return;
+      var dy = e.clientY - startY;
+      var maxThumbTop = cachedClientH - cachedThumbH;
+      if (maxThumbTop <= 0) return;
+      var scrollRatio = dy / maxThumbTop;
+      var maxScroll = cachedScrollH - cachedClientH;
+      document.documentElement.scrollTop = startScroll + scrollRatio * maxScroll;
+      update();
+    });
+
+    document.addEventListener("mouseup", function () {
+      if (!dragging) return;
+      dragging = false;
+      thumb.classList.remove("active");
+      document.body.style.userSelect = "";
+      document.body.style.webkitUserSelect = "";
+      scheduleHide();
+    });
+
+    // 触摸支持
+    thumb.addEventListener("touchstart", function (e) {
+      e.preventDefault();
+      dragging = true;
+      var touch = e.touches[0];
+      startY = touch.clientY;
+      startScroll = document.documentElement.scrollTop;
+      cachedScrollH = document.documentElement.scrollHeight;
+      cachedClientH = document.documentElement.clientHeight;
+      cachedThumbH = Math.max(30, cachedClientH * (cachedClientH / cachedScrollH));
+      thumb.classList.add("active");
+    }, { passive: false });
+
+    document.addEventListener("touchmove", function (e) {
+      if (!dragging) return;
+      var touch = e.touches[0];
+      var dy = touch.clientY - startY;
+      var maxThumbTop = cachedClientH - cachedThumbH;
+      if (maxThumbTop <= 0) return;
+      var scrollRatio = dy / maxThumbTop;
+      var maxScroll = cachedScrollH - cachedClientH;
+      document.documentElement.scrollTop = startScroll + scrollRatio * maxScroll;
+      update();
+    }, { passive: true });
+
+    document.addEventListener("touchend", function () {
+      if (!dragging) return;
+      dragging = false;
+      thumb.classList.remove("active");
+      scheduleHide();
+    });
+
+    // 点击轨道跳转
+    track.addEventListener("click", function (e) {
+      if (e.target === thumb) return;
+      var rect = track.getBoundingClientRect();
+      var y = e.clientY - rect.top;
+      var el = document.documentElement;
+      var maxScroll = el.scrollHeight - el.clientHeight;
+      if (maxScroll <= 0) return;
+      var ratio = y / el.clientHeight;
+      el.scrollTop = ratio * maxScroll;
+      update();
+    });
+
+    // 初始计算
+    update();
+  }
+
   /* ── 初始化 ────────────────────────────────────────────── */
   function init() {
     initTheme();
+    initCustomScrollbar();
     initToggleGroup();
     initTTLControls();
     initTabs();

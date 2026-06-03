@@ -40,6 +40,69 @@
   font-display: swap;
 }
 
+/* ── 自定义覆盖式滚动条（JS + CSS，无布局偏移） ─────────── */
+
+/* ─ 隐藏原生滚动条（仅 html，不动 body） ─ */
+html {
+  overflow-y: scroll;
+  scrollbar-width: none;                        /* Firefox */
+  -ms-overflow-style: none;                     /* IE / 旧 Edge */
+}
+
+html::-webkit-scrollbar {
+  width: 0;
+  display: none;                                /* Chrome / Safari / Edge */
+}
+
+/* ─ 覆盖式滚动条轨道 ─ */
+.sb-track {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100dvh;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.sb-track.show {
+  opacity: 1;
+}
+
+/* ─ 覆盖式滚动条滑块 ─ */
+.sb-thumb {
+  position: absolute;
+  right: 1px;
+  width: 6px;
+  min-height: 30px;
+  border-radius: 9999px;
+  background: oklch(0.60 0.015 258 / 28%);
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background 0.15s ease, width 0.15s ease, right 0.15s ease;
+}
+
+.sb-thumb:hover,
+.sb-thumb.active {
+  background: oklch(0.50 0.015 258 / 48%);
+  width: 8px;
+  right: 0;
+}
+
+/* ─ Dark 模式 ─ */
+.dark .sb-thumb {
+  background: oklch(0.65 0.02 255 / 32%);
+}
+
+.dark .sb-thumb:hover,
+.dark .sb-thumb.active {
+  background: oklch(0.75 0.025 255 / 52%);
+  width: 8px;
+  right: 0;
+}
+
 /* ── 克制动画 ─────────────────────────────────────────────
    仅允许特定、有意图的过渡效果
    按钮无悬停效果（按需求） */
@@ -139,6 +202,31 @@ body {
   letter-spacing: -0.02em;
 }
 
+/* ── GitHub 链接按钮 ─────────────────────────────────────── */
+.github-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-md, 0.5rem);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.github-link svg {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.github-link:hover {
+  color: var(--foreground);
+}
+
 /* ── 主题切换按钮 ───────────────────────────────────────── */
 .theme-toggle {
   display: inline-flex;
@@ -159,10 +247,10 @@ body {
   height: 1.125rem;
 }
 
-.theme-toggle .icon-sun { display: none; }
-.dark .theme-toggle .icon-sun { display: block; }
-.theme-toggle .icon-moon { display: block; }
-.dark .theme-toggle .icon-moon { display: none; }
+.theme-toggle .icon-sun { display: block; }
+.dark .theme-toggle .icon-sun { display: none; }
+.theme-toggle .icon-moon { display: none; }
+.dark .theme-toggle .icon-moon { display: block; }
 
 /* ── 主内容区 ───────────────────────────────────────────── */
 .app-main {
