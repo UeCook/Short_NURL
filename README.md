@@ -61,7 +61,7 @@ Short_NURL uses two types of data files:
 | `temp.json`     | Temporary short URL data                                      |
 | `perm.json.bak` | Snapshot of the last successful write to permanent short URLs |
 | `temp.json.bak` | Snapshot of the last successful write to temporary short URLs |
-| `keys.json`     | Hashed data for API Keys / Ping Keys                          |
+| `keys.json`     | Hashed data for API Keys                       |
 
 Cold storage JSON adopts a unified envelope format:
 
@@ -262,7 +262,7 @@ Short_NURL 使用两类数据文件：
 | `temp.json` | 临时短链数据 |
 | `perm.json.bak` | 永久短链上一次成功写入快照 |
 | `temp.json.bak` | 临时短链上一次成功写入快照 |
-| `keys.json` | API Key / Ping Key 哈希数据 |
+| `keys.json` | API Key |
 
 冷存储 JSON 采用统一信封格式：
 
