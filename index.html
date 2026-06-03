@@ -46,7 +46,7 @@
         </summary>
 
         <section style="padding:0 1.25rem 1.25rem">
-          <form id="createForm" class="create-form">
+          <form id="createForm" class="create-form" autocomplete="off">
 
             <!-- Target URL Field -->
             <div class="field">
@@ -94,7 +94,7 @@
                 id="codeInput"
                 placeholder="留空自动生成，支持 1~4 位小写字母、数字和 - "
                 maxlength="4"
-                pattern="[0-9a-zA-Z-]{1,4}"
+                pattern="[-0-9a-zA-Z]{1,4}"
               >
             </div>
 
@@ -104,9 +104,13 @@
               <input
                 type="password"
                 id="createKeyInput"
+                name="su-key-input"
                 placeholder="su_xK9mP2qR…"
                 autocomplete="off"
+                data-lpignore="true"
+                data-1p-ignore
                 spellcheck="false"
+                readonly
               >
             </div>
 
@@ -166,9 +170,13 @@
               <input
                 type="password"
                 id="manageKeyInput"
+                name="su-key-manage"
                 placeholder="su_xK9mP2qR…"
                 autocomplete="off"
+                data-lpignore="true"
+                data-1p-ignore
                 spellcheck="false"
+                readonly
               >
               <button type="button" id="manageConfirmBtn" class="btn btn-primary btn-sm">确认</button>
             </div>

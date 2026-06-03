@@ -247,19 +247,7 @@
     var permText = permCount + " / " + permLimit;
     var tempText = tempCount + " / " + tempLimit;
 
-    // 热存储可用时，交叉验证并附带差异提示
-    if (hotOk && data.hot_perm_count !== undefined) {
-      var hotPerm = data.hot_perm_count;
-      var hotTemp = data.hot_temp_count;
-      // 热/冷计数不一致时附加热存储参考值（供诊断）
-      if (permCount !== hotPerm) {
-        permText += "  (热存: " + hotPerm + ")";
-      }
-      if (tempCount !== hotTemp) {
-        tempText += "  (热存: " + hotTemp + ")";
-      }
-    }
-
+    // 热存漂移仅服务端日志记录（stat.php error_log），不暴露给用户
     // 热存储不可用时附带警告标记
     if (!hotOk) {
       permText += "  \u26A0 仅冷存";
@@ -662,9 +650,51 @@
     update();
   }
 
+  /* ── 阻止密码管理器 ───────────────────────────────────── */
+  function initPasswordProtection() {
+    // readonly 阻止浏览器在页面加载时识别为密码字段
+    // 用户聚焦时移除 readonly，允许正常输入
+    var inputs = document.querySelectorAll('input[readonly][type="password"]');
+    inputs.forEach(function (el) {
+      el.addEventListener("mousedown", function () { this.removeAttribute("readonly"); });
+      el.addEventListener("touchstart", function () { this.removeAttribute("readonly"); });
+      el.addEventListener("focus", function () { this.removeAttribute("readonly"); });
+    });
+  }
+
+  /* ── 禁止复制和右键 ───────────────────────────────────── */
+  function initCopyProtection() {
+    // 禁止右键菜单
+    document.addEventListener("contextmenu", function (e) {
+      e.preventDefault();
+    });
+
+    // 禁止复制、剪切
+    document.addEventListener("copy", function (e) { e.preventDefault(); });
+    document.addEventListener("cut", function (e) { e.preventDefault(); });
+
+    // 禁止相关键盘快捷键
+    document.addEventListener("keydown", function (e) {
+      // Ctrl/Cmd + C (复制), U (查看源码), S (保存), A (全选), P (打印)
+      if ((e.ctrlKey || e.metaKey) && /^[cusap]$/i.test(e.key)) {
+        e.preventDefault();
+      }
+      // F12 (开发者工具)
+      if (e.key === "F12") {
+        e.preventDefault();
+      }
+      // Ctrl/Cmd + Shift + I/J/C (开发者工具面板)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && /^[ijc]$/i.test(e.key)) {
+        e.preventDefault();
+      }
+    });
+  }
+
   /* ── 初始化 ────────────────────────────────────────────── */
   function init() {
     initTheme();
+    initPasswordProtection();
+    initCopyProtection();
     initCustomScrollbar();
     initToggleGroup();
     initTTLControls();

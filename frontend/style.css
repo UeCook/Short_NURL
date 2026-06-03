@@ -124,9 +124,13 @@ details[open] .list-chevron {
   to { transform: rotate(360deg); }
 }
 
-/* ── 全局字体应用 ───────────────────────────────────────── */
+/* ── 全局字体应用 & 禁止选择 ─────────────────────────────── */
 body {
   font-family: "MiSans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
 }
 
 /* ── 应用布局 ───────────────────────────────────────────── */
