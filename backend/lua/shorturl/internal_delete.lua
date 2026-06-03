@@ -1,6 +1,11 @@
 -- internal_delete.lua - Delete from hot storage (su_url + su_exp shared dicts)
 -- Called by PHP via POST /internal/delete
 -- Also decrements perm_count / temp_count in su_meta for accurate tracking
+--
+-- Type resolution priority for counter decrement:
+--   1. params.type from PHP (authoritative — determined from cold storage lookup)
+--   2. su_exp lookup (fallback — may be missing due to shared dict restart/eviction)
+--   3. Skip decrement with warning log (both sources unavailable)
 
 local cjson = require "cjson.safe"
 
@@ -28,29 +33,47 @@ function M.handle()
     end
 
     local code = params.code
+    local forced_type = params.type  -- "perm" or "temp" from PHP (authoritative)
     local su_url = ngx.shared.su_url
     local su_exp = ngx.shared.su_exp
     local su_meta = ngx.shared.su_meta
 
-    -- Check entry type before deletion to update the correct counter
-    local exp_str = su_exp:get(code)
-    if exp_str then
-        -- Entry exists: decrement the appropriate counter
-        local count_key
-        if exp_str == "0" then
-            count_key = "perm_count"
-        else
-            -- Any non-"0" value is treated as temporary (including corrupted data)
-            count_key = "temp_count"
+    -- Determine which counter to decrement using priority:
+    --   1. params.type from PHP (authoritative — determined from cold storage)
+    --   2. su_exp lookup (fallback — may be missing due to shared dict restart/eviction)
+    --   3. Skip decrement with warning log
+    local count_key = nil
+    local source = nil
+
+    if forced_type then
+        -- PHP provided the type from cold storage lookup — use it directly
+        count_key = (forced_type == "perm") and "perm_count" or "temp_count"
+        source = "php:" .. forced_type
+    else
+        local exp_str = su_exp:get(code)
+        if exp_str then
+            if exp_str == "0" then
+                count_key = "perm_count"
+            else
+                count_key = "temp_count"
+            end
+            source = "su_exp"
         end
+    end
+
+    if count_key then
         local new_val, err = su_meta:incr(count_key, -1)
         if not new_val then
-            -- incr failed (key may not exist), initialize to 0 (entry already deleted)
-            su_meta:set(count_key, 0)
+            -- incr failed (key may not exist), use add to initialize to 0
+            su_meta:add(count_key, 0)
         elseif new_val < 0 then
             -- Count went negative (drift), reset to 0
             su_meta:set(count_key, 0)
         end
+    else
+        -- Both sources unavailable — cannot determine type, skip decrement
+        ngx.log(ngx.WARN, "ShortURL: delete - cannot determine type for code=", code,
+            ", skipping count decrement (su_exp missing, no PHP type hint)")
     end
 
     su_url:delete(code)

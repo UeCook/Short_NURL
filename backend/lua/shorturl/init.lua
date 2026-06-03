@@ -42,10 +42,15 @@ local function ensure_json(path, tz)
     local empty = { v = 1, at = time_util.now_iso8601(tz), d = {} }
     local tmp = path .. ".lua.tmp"
     f = io.open(tmp, "w")
-    if f then
-        f:write(cjson.encode(empty))
-        f:close()
-        os.rename(tmp, path)
+    if not f then
+        ngx.log(ngx.ERR, "ShortURL: 无法创建数据文件: ", tmp)
+        return
+    end
+    f:write(cjson.encode(empty))
+    f:close()
+    local ok, err = os.rename(tmp, path)
+    if not ok then
+        ngx.log(ngx.ERR, "ShortURL: 重命名失败: ", tmp, " -> ", path, " err: ", err)
     end
 end
 
@@ -78,7 +83,7 @@ function M.init()
     su_exp:flush_all()
     su_meta:flush_all()
 
-    local now_str = time_util.now_iso8601(tz)
+    local now_epoch = ngx.time()
     local perm_count = 0
     local temp_count = 0
 
@@ -94,11 +99,11 @@ function M.init()
     local temp_data = load_json(temp_path)
     for code, entry in pairs(temp_data.d) do
         local t = entry.t  -- ISO 8601 expiration string
-        if t and t ~= "0" and t > now_str then
-            -- Not expired: calculate remaining TTL in seconds
+        if t and t ~= "0" then
+            -- Use epoch comparison to handle mixed timezone formats correctly
             local exp_epoch = time_util.parse_iso8601(t)
             if exp_epoch then
-                local remaining = exp_epoch - ngx.time()
+                local remaining = exp_epoch - now_epoch
                 if remaining > 0 then
                     -- su_url uses native TTL for auto-expiry
                     -- su_exp uses TTL=0 so expire_sweep can reliably find entries

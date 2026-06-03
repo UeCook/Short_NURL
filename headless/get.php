@@ -34,7 +34,7 @@ if (isset($permData[$code])) {
         'url'  => $item['url'],
         'lurl' => $item['lurl'],
         'exp'  => 'permanent',
-    ]);
+    ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -52,7 +52,7 @@ if (isset($tempData[$code])) {
         'url'  => $item['url'],
         'lurl' => $item['lurl'],
         'exp'  => isset($item['t']) ? $item['t'] : '-',
-    ]);
+    ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 

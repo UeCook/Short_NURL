@@ -53,8 +53,13 @@ function M.handle()
         local count_key = (ttl == 0) and "perm_count" or "temp_count"
         local new_val, err = su_meta:incr(count_key, 1)
         if not new_val then
-            -- incr failed (key may not exist after cold start), initialize it
-            su_meta:set(count_key, 1)
+            -- incr failed (key may not exist after cold start), use add to initialize
+            -- add only succeeds if key doesn't exist, avoiding reset of existing counts
+            local ok_add = su_meta:add(count_key, 1)
+            if not ok_add then
+                -- key was created by another worker between incr and add, retry incr
+                su_meta:incr(count_key, 1)
+            end
         end
     end
 

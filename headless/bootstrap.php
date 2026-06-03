@@ -8,7 +8,7 @@
  * 4. 加载公共库（复用 api/common/）
  * 5. 无头认证：仅接受 X-Headless-Token 请求头
  *
- * 与 api/bootstrap.php 的差异：
+ * 与 api/common/bootstrap.php 的差异：
  *   - 不设置 CORS（无浏览器调用）
  *   - 认证方式不同（统一 X-Headless-Token）
  *   - 错误格式不同（{ "error": "code", "message": "中文" }）
@@ -21,11 +21,11 @@ $cfg = require __DIR__ . '/../api/config.php';
 // 无头链路不需要 CORS，仅处理 OPTIONS 预检
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(204); exit; }
 
-// 加载公共库（复用 api/common/）
+// 加载公共库（复用 api/ 模块）
 require_once __DIR__ . '/../api/common/helpers.php';
-require_once __DIR__ . '/../api/common/keys.php';
-require_once __DIR__ . '/../api/common/json_store.php';
-require_once __DIR__ . '/../api/common/internal.php';
+require_once __DIR__ . '/../api/key/keys.php';
+require_once __DIR__ . '/../api/storage/json_store.php';
+require_once __DIR__ . '/../api/lua/internal.php';
 
 /**
  * 无头链路统一错误输出
@@ -42,43 +42,30 @@ function hl_error($code, $message, $httpStatus) {
 }
 
 // ── 检查数据文件可读写性（必须在认证之前）──────────
-// data 目录（777）及内部文件（666）权限缺失时，提前返回 430
+// 支持文件不存在时检查目录可写性（允许首次部署时自动创建）
 // 避免被误判为 Key 无效（406）
 if (!checkDataAccess($cfg)) {
     hl_error('data_inaccessible', '数据不可访问', 430);
 }
 
-/**
- * 无头链路认证
- * 仅接受 X-Headless-Token 请求头，无 fallback
- */
-$rawToken = $_SERVER['HTTP_X_HEADLESS_TOKEN'] ?? '';
-if (empty($rawToken)) {
-    hl_error('missing_key', '缺少密钥', 406);
-}
-// @外调用_&10：getKeyStore()->verify — 验证无头链路 API Key
-$keyType = getKeyStore()->verify($rawToken);
-if (!$keyType) {
-    hl_error('invalid_key', '密钥失效或不正确', 406);
+// ── 认证解析（与 api 链路共享同一套公共函数）─────────
+// php://input 只能读一次，提前缓存
+$RAW_INPUT = file_get_contents('php://input');
+
+require_once __DIR__ . '/../api/key/auth_extract.php';
+require_once __DIR__ . '/../api/key/auth_verify.php';
+
+// @外调用_&5：auth_extract — 无头链路认证凭证提取
+$rawCredential = auth_extract($RAW_INPUT);
+// @外调用_&6：auth_verify — 无头链路认证凭证验证，返回 $authCtx
+$AUTH = auth_verify($rawCredential ?? '');
+
+if (!$AUTH['valid']) {
+    if ($AUTH['reason'] === 'missing') {
+        hl_error('missing_key', '缺少密钥', 406);
+    } else {
+        hl_error('invalid_key', '密钥失效或不正确', 406);
+    }
 }
 
-/**
- * 获取全局配置的 KeyStore 实例
- * 与 api/bootstrap.php 中的完全一致，确保共享同一实例
- */
-// @关键_$25：getKeyStore（无头版）— 获取全局 KeyStore 单例（延迟初始化）
-function getKeyStore() {
-    global $cfg;
-    static $instance = null;
-    if ($instance === null) {
-        $instance = new KeyStore(
-            $cfg['keys_path'],
-            $cfg['tz_offset'],
-            $cfg['key_ttl_days'],
-            $cfg['onetime_pool_size'],
-            $cfg['key_charset'],
-            $cfg['key_length']
-        );
-    }
-    return $instance;
-}
+// getKeyStore() 已提取至 helpers.php，由 function_exists 守卫防止重复定义

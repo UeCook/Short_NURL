@@ -9,7 +9,8 @@
 require __DIR__ . '/bootstrap.php';
 
 // ── 解析输入 ─────────────────────────────────────────
-$input = json_decode(file_get_contents('php://input'), true);
+// $RAW_INPUT 由 bootstrap.php 缓存（php://input 只能读一次）
+$input = json_decode($GLOBALS['RAW_INPUT'] ?? '{}', true);
 if (!$input) {
     hl_error('bad_request', '无效的请求体', 400);
 }
@@ -33,6 +34,24 @@ $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
 
 $code = isset($input['code']) ? trim($input['code']) : '';
 $isCustom = !empty($code);
+
+// ── 永久链去重（写入前查冷存储，URL 完全匹配则复用）──
+// @关键_$29：永久链去重 — ttl==0 且未传自定义短码时遍历 perm.json，URL 严格匹配则返回已有短码
+// 传了自定义短码说明用户有明确意图，去重不干预
+if (!$isTemp && !$isCustom) {
+    $permData = $permStore->read();
+    foreach ($permData as $existing) {
+        if (isset($existing['url']) && $existing['url'] === $url) {
+            http_response_code(200);
+            echo json_encode([
+                'short_url' => $existing['lurl'],
+                'dedup'     => true,
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+    }
+}
+
 if ($isCustom) {
     $code = strtolower($code);
     if (!preg_match('/^[0-9a-z-]{1,4}$/', $code)) { hl_error('invalid_code', '后缀格式错误', 400); }
@@ -55,6 +74,7 @@ $store->lockBegin();
 $errorResponse = null;
 try {
     $data = $store->readLocked();
+    if ($isTemp) cleanExpiredEntries($data);
     if ($isCustom) {
         if (isset($data[$code])) { $errorResponse = ['conflict', '已占用', 409]; }
         elseif ($otherStore->find($code)) { $errorResponse = ['conflict', '已占用', 409]; }
@@ -76,7 +96,6 @@ try {
         }
     }
     if (!$errorResponse) {
-        if ($isTemp) cleanExpiredEntries($data);
         $activeCount = 0;
         foreach ($data as $item) { if (!isExpired($item['t'] ?? null)) $activeCount++; }
         $limit = $cfg[$isTemp ? 'temp_limit' : 'perm_limit'];
@@ -95,7 +114,7 @@ if ($errorResponse) {
     hl_error($errorResponse[0], $errorResponse[1], $errorResponse[2]);
 }
 
-// @外调用_&11：internalSet — 写入热存储（通知 OpenResty 更新共享内存）
+// @外调用_&12：internalSet — 无头创建接口写入热存储
 $synced = internalSet($cfg, $code, $url, $isTemp ? $ttl : 0, $exp_str);
 if (!$synced) {
     $detail = getLastInternalError();
@@ -105,20 +124,19 @@ if (!$synced) {
 
 if (!$synced) {
     // 冷存储已写入但热存储同步失败 — 返回 HTTP 207 (Multi-Status)
-    $detail = getLastInternalError();
     http_response_code(207);
     $resp = [
         'short_url' => $shortUrl,
         'synced' => false,
-        'warning' => '热存储同步失败：短链已保存但暂不可用。' . ($detail ? $detail['message'] : '请检查 OpenResty 内部接口连通性。'),
+        'warning' => '热存储同步失败：短链已保存但暂不可用，请稍后重试',
     ];
     if ($isTemp) $resp['exp'] = $exp_str;
-    echo json_encode($resp);
+    echo json_encode($resp, JSON_UNESCAPED_UNICODE);
 } else {
     http_response_code(201);
     if ($isTemp) {
-        echo json_encode(['short_url'=>$shortUrl,'exp'=>$exp_str]);
+        echo json_encode(['short_url'=>$shortUrl,'exp'=>$exp_str], JSON_UNESCAPED_UNICODE);
     } else {
-        echo json_encode(['short_url'=>$shortUrl]);
+        echo json_encode(['short_url'=>$shortUrl], JSON_UNESCAPED_UNICODE);
     }
 }

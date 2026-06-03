@@ -14,6 +14,7 @@ $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
 // 永久短链：无 t 字段，exp 固定为 "permanent"
 $perm = [];
 foreach ($permStore->read() as $code => $item) {
+    if (!isset($item['id'], $item['url'], $item['lurl'])) continue;
     $perm[] = [
         'id'   => $item['id'],
         'url'  => $item['url'],
@@ -25,6 +26,7 @@ foreach ($permStore->read() as $code => $item) {
 // 临时短链：用时区安全的 isExpired() 过滤过期条目
 $temp = [];
 foreach ($tempStore->read() as $code => $item) {
+    if (!isset($item['id'], $item['url'], $item['lurl'])) continue;
     if (isExpired($item['t'] ?? null)) {
         continue;
     }
@@ -36,4 +38,4 @@ foreach ($tempStore->read() as $code => $item) {
     ];
 }
 
-echo json_encode(['permanent' => $perm, 'temporary' => $temp]);
+echo json_encode(['permanent' => $perm, 'temporary' => $temp], JSON_UNESCAPED_UNICODE);

@@ -100,8 +100,12 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     }).then(function (res) {
-      return res.json().then(function (data) {
-        if (!res.ok) throw { status: res.status, message: data.error };
+      return res.text().then(function (text) {
+        var data;
+        try { data = JSON.parse(text); } catch (e) {
+          throw { status: res.status, message: "服务器响应格式错误" };
+        }
+        if (!res.ok) throw { status: res.status, message: data.error || "请求失败" };
         return data;
       });
     });
@@ -112,8 +116,12 @@
     return fetch(API_BASE + endpoint, {
       headers: { "X-Token": key }
     }).then(function (res) {
-      return res.json().then(function (data) {
-        if (!res.ok) throw { status: res.status, message: data.error };
+      return res.text().then(function (text) {
+        var data;
+        try { data = JSON.parse(text); } catch (e) {
+          throw { status: res.status, message: "服务器响应格式错误" };
+        }
+        if (!res.ok) throw { status: res.status, message: data.error || "请求失败" };
         return data;
       });
     });
@@ -202,6 +210,13 @@
   }
 
   /* ── 统计数据显示 ─────────────────────────────────────── */
+  /* 权威来源：冷存储（JSON 文件，countActive 无状态遍历永不漂移）
+   * 内部参考：热存储（Lua shared dict，仅供诊断对比）
+   * 显示规则：
+   *   - 主显示冷存储计数（与无头模式 CLI 数据源一致）
+   *   - 热存储可用且有差异时 → 附带热存参考值供诊断
+   *   - 热存储不可用 → 附带 ⚠ 标记提示
+   */
   function loadStat(key) {
     if (!key) { renderStat(null); return; }
     apiGet("/stat", key)
@@ -213,13 +228,46 @@
   }
 
   function renderStat(data) {
+    var permEl = $("#statPermValue");
+    var tempEl = $("#statTempValue");
+    if (!permEl || !tempEl) return;
     if (!data) {
-      $("#statPermValue").textContent = "\u2014";
-      $("#statTempValue").textContent = "\u2014";
+      permEl.textContent = "\u2014";
+      tempEl.textContent = "\u2014";
       return;
     }
-    $("#statPermValue").textContent = data.perm_count + " / " + data.perm_limit;
-    $("#statTempValue").textContent = data.temp_count + " / " + data.temp_limit;
+
+    var hotOk = data.hot_available !== false;  // 热存储是否可用
+    var permCount = data.perm_count;            // 冷存储（权威来源）
+    var tempCount = data.temp_count;            // 冷存储（权威来源）
+    var permLimit = data.perm_limit;
+    var tempLimit = data.temp_limit;
+
+    // 冷存储为主显示（无状态遍历，永不漂移）
+    var permText = permCount + " / " + permLimit;
+    var tempText = tempCount + " / " + tempLimit;
+
+    // 热存储可用时，交叉验证并附带差异提示
+    if (hotOk && data.hot_perm_count !== undefined) {
+      var hotPerm = data.hot_perm_count;
+      var hotTemp = data.hot_temp_count;
+      // 热/冷计数不一致时附加热存储参考值（供诊断）
+      if (permCount !== hotPerm) {
+        permText += "  (热存: " + hotPerm + ")";
+      }
+      if (tempCount !== hotTemp) {
+        tempText += "  (热存: " + hotTemp + ")";
+      }
+    }
+
+    // 热存储不可用时附带警告标记
+    if (!hotOk) {
+      permText += "  \u26A0 仅冷存";
+      tempText += "  \u26A0 仅冷存";
+    }
+
+    permEl.textContent = permText;
+    tempEl.textContent = tempText;
   }
 
   /* ── 创建短链 ──────────────────────────────────────────── */
@@ -239,6 +287,7 @@
     if (code) body.code = code;
 
     var btn = $("#createBtn");
+    if (!btn) return;
     btn.disabled = true;
     btn.textContent = "创建中\u2026";
 
@@ -286,34 +335,12 @@
     $("#createForm").classList.remove("hidden");
     $("#successView").classList.remove("visible");
     // 聚焦链接输入框以便快速重新输入
-    $("#urlInput").focus();
+    var urlInput = $("#urlInput");
+    if (urlInput) urlInput.focus();
   }
 
   function copySuccessLink() {
     var url = ($("#successUrl").textContent || "").trim();
-    if (!url) return;
-    navigator.clipboard.writeText(url)
-      .then(function () { showToast("已复制到剪贴板"); })
-      .catch(function () { showToast("复制失败", "error"); });
-  }
-
-  /* ── 旧版结果显示（保留以兼容） ───────────────────────── */
-  function renderResult(shortUrl, exp) {
-    var box = $("#resultBox");
-    $("#resultUrl").textContent = shortUrl;
-    var expEl = $("#resultExp");
-    if (exp && exp !== "permanent") {
-      expEl.textContent = "过期: " + formatExp(exp);
-      expEl.style.display = "";
-    } else {
-      expEl.textContent = "";
-      expEl.style.display = "none";
-    }
-    box.classList.add("visible");
-  }
-
-  function copyResult() {
-    var url = ($("#resultUrl").textContent || "").trim();
     if (!url) return;
     navigator.clipboard.writeText(url)
       .then(function () { showToast("已复制到剪贴板"); })
@@ -337,18 +364,17 @@
   function renderList(permList, tempList) {
     var permEl = $("#permList");
     var tempEl = $("#tempList");
-    var badge = $("#listBadge");
+
+    if (!permEl || !tempEl) return;
 
     if (!permList && !tempList) {
       permEl.innerHTML = '<div class="url-list-empty">请输入 API Key 后查看列表</div>';
       tempEl.innerHTML = '<div class="url-list-empty">请输入 API Key 后查看列表</div>';
-      badge.textContent = "";
       return;
     }
 
     var permCount = permList.length;
     var tempCount = tempList.length;
-    badge.textContent = permCount + " 永久 / " + tempCount + " 临时";
 
     permEl.innerHTML = permCount > 0
       ? permList.map(function (item) { return renderUrlItem(item, "permanent"); }).join("")
@@ -427,11 +453,6 @@
     });
   }
 
-  /* ── 折叠面板切换 ─────────────────────────────────────── */
-  function initAccordionToggles() {
-    // 不自动加载 — 用户需点击"确认"按钮加载数据
-  }
-
   /* ── 管理确认按钮 ─────────────────────────────────────── */
   function handleManageConfirm() {
     var key = getManageKey();
@@ -444,14 +465,26 @@
     refreshManageData();
   }
 
-  /* ── 标签页切换 ───────────────────────────────────────── */
+  /* ── 标签页切换（toggle-group 滑动动画风格） ─────────── */
   function initTabs() {
-    var tabBtns = document.querySelectorAll("[data-tab]");
-    tabBtns.forEach(function (btn) {
+    var group = $("#listToggleGroup");
+    if (!group) return;
+    var btns = group.querySelectorAll(".toggle-btn");
+
+    btns.forEach(function (btn) {
       btn.addEventListener("click", function () {
+        // 更新激活状态
+        btns.forEach(function (b) { b.classList.remove("active"); });
+        btn.classList.add("active");
+
         var target = btn.getAttribute("data-tab");
-        tabBtns.forEach(function (b) { b.setAttribute("aria-selected", "false"); });
-        btn.setAttribute("aria-selected", "true");
+        var isTemp = (target === "temporary");
+
+        // 列表顺序为 [永久 | 临时]，默认高亮左侧（永久）
+        // 点击临时时滑块移到右侧
+        group.classList.toggle("is-temp", isTemp);
+
+        // 切换面板显示
         document.querySelectorAll("[data-tabpanel]").forEach(function (p) { p.style.display = "none"; });
         var panel = document.querySelector('[data-tabpanel="' + target + '"]');
         if (panel) panel.style.display = "";
@@ -636,12 +669,10 @@
     initToggleGroup();
     initTTLControls();
     initTabs();
-    initAccordionToggles();
     initListActions();
 
     $("#themeToggle").addEventListener("click", toggleTheme);
     $("#createForm").addEventListener("submit", handleCreate);
-    $("#copyResultBtn").addEventListener("click", copyResult);
     // 成功视图按钮绑定
     var successCopyBtn = $("#successCopyBtn");
     if (successCopyBtn) {
@@ -654,6 +685,15 @@
     var confirmBtn = $("#manageConfirmBtn");
     if (confirmBtn) {
       confirmBtn.addEventListener("click", handleManageConfirm);
+    }
+
+    // 刷新按钮绑定
+    var refreshBtn = $("#listRefreshBtn");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", function () {
+        refreshManageData();
+        showToast("列表已刷新");
+      });
     }
   }
 

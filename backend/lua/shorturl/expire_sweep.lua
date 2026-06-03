@@ -33,8 +33,7 @@ function M.run(premature)
 
     local deleted = 0
     local ok, err = pcall(function()
-        local tz = ngx.var.su_tz_offset or "+08:00"
-        local now_str = time_util.now_iso8601(tz)
+        local now_epoch = ngx.time()
 
         -- Iterate su_exp (TTL=0, always reliable) instead of su_url
         -- su_url may have already been reclaimed by native TTL auto-expiry,
@@ -45,11 +44,16 @@ function M.run(premature)
             if exp_str then
                 if exp_str == "0" then
                     -- Permanent link, skip
-                elseif exp_str < now_str then
-                    -- Expired: delete from both dicts (su_url may already be gone)
-                    su_url:delete(code)
-                    su_exp:delete(code)
-                    deleted = deleted + 1
+                else
+                    -- Use epoch comparison instead of string comparison
+                    -- to handle mixed timezone formats correctly
+                    local exp_epoch = time_util.parse_iso8601(exp_str)
+                    if exp_epoch and exp_epoch < now_epoch then
+                        -- Expired: delete from both dicts (su_url may already be gone)
+                        su_url:delete(code)
+                        su_exp:delete(code)
+                        deleted = deleted + 1
+                    end
                 end
                 -- else: not expired, skip
             end
@@ -64,8 +68,9 @@ function M.run(premature)
         -- Decrement temp_count
         local new_val, err = su_meta:incr("temp_count", -deleted)
         if not new_val then
-            -- incr failed (key may not exist), initialize to 0
-            su_meta:set("temp_count", 0)
+            -- incr failed (key may not exist), use add to initialize to 0
+            -- add only succeeds if key doesn't exist, avoiding reset of existing counts
+            su_meta:add("temp_count", 0)
         elseif new_val < 0 then
             -- Count went negative (drift), reset to 0
             su_meta:set("temp_count", 0)

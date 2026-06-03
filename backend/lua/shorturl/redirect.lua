@@ -19,10 +19,7 @@ function M.go()
     local target = su_url:get(code)
 
     if not target then
-        ngx.status = 404
-        ngx.header["Content-Type"] = "application/json"
-        ngx.say('{"error":"not found"}')
-        ngx.exit(404)
+        ngx.redirect("/404.html")
         return
     end
 
