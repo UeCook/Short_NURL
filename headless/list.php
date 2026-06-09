@@ -34,7 +34,7 @@ foreach ($tempStore->read() as $code => $item) {
         'id'   => $item['id'],
         'url'  => $item['url'],
         'lurl' => $item['lurl'],
-        'exp'  => isset($item['t']) ? $item['t'] : '-',
+        'exp'  => $item['t'] ?? null,
     ];
 }
 

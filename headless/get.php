@@ -29,6 +29,9 @@ $permStore = new JsonStore($cfg['perm_path'], $cfg['tz_offset']);
 $permData = $permStore->read();
 if (isset($permData[$code])) {
     $item = $permData[$code];
+    if (!isset($item['id'], $item['url'], $item['lurl'])) {
+        hl_error('data_corrupted', '数据条目损坏', 500);
+    }
     echo json_encode([
         'id'   => $item['id'],
         'url'  => $item['url'],
@@ -43,6 +46,9 @@ $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
 $tempData = $tempStore->read();
 if (isset($tempData[$code])) {
     $item = $tempData[$code];
+    if (!isset($item['id'], $item['url'], $item['lurl'])) {
+        hl_error('data_corrupted', '数据条目损坏', 500);
+    }
     // 检查是否过期
     if (isExpired($item['t'] ?? null)) {
         hl_error('expired', '该短链已过期', 404);
@@ -51,7 +57,7 @@ if (isset($tempData[$code])) {
         'id'   => $item['id'],
         'url'  => $item['url'],
         'lurl' => $item['lurl'],
-        'exp'  => isset($item['t']) ? $item['t'] : '-',
+        'exp'  => $item['t'] ?? null,
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }

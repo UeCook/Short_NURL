@@ -63,7 +63,7 @@ function checkDataAccess($cfg) {
  */
 // @关键_$27：checkFileAccess — 检查单个文件的可访问性（文件存在检查可读写，不存在检查目录可写）
 function checkFileAccess($path) {
-    if (empty($path)) return true;
+    if ($path === '' || $path === null) return false;
     if (file_exists($path)) {
         return is_readable($path) && is_writable($path);
     }

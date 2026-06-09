@@ -19,7 +19,7 @@ header('Content-Type: application/json; charset=utf-8');
 $cfg = require __DIR__ . '/../api/config.php';
 
 // 无头链路不需要 CORS，仅处理 OPTIONS 预检
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(204); exit; }
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') { http_response_code(204); exit; }
 
 // 加载公共库（复用 api/ 模块）
 require_once __DIR__ . '/../api/common/helpers.php';
@@ -50,13 +50,16 @@ if (!checkDataAccess($cfg)) {
 
 // ── 认证解析（与 api 链路共享同一套公共函数）─────────
 // php://input 只能读一次，提前缓存
-$RAW_INPUT = file_get_contents('php://input');
+$RAW_INPUT = @file_get_contents('php://input');
+if ($RAW_INPUT === false) {
+    $RAW_INPUT = '';
+}
 
 require_once __DIR__ . '/../api/key/auth_extract.php';
 require_once __DIR__ . '/../api/key/auth_verify.php';
 
-// @外调用_&5：auth_extract — 无头链路认证凭证提取
-$rawCredential = auth_extract($RAW_INPUT);
+// @外调用_&5：auth_extract — 无头链路认证凭证提取（仅接受 X-Headless-Token）
+$rawCredential = auth_extract($RAW_INPUT, 'headless');
 // @外调用_&6：auth_verify — 无头链路认证凭证验证，返回 $authCtx
 $AUTH = auth_verify($rawCredential ?? '');
 

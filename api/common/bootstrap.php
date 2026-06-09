@@ -15,12 +15,25 @@ header('Content-Type: application/json; charset=utf-8');
 
 $cfg = require __DIR__ . '/../config.php';
 
+// ── 前端面板总开关（PHP 层）─────────────────────────
+// 关闭时直接返回 403，所有 /api/* 接口不可访问
+// 短链跳转走 Lua，不受此影响；nginx 层的 return 403 与此独立生效
+if (empty($cfg['panel_enabled'])) {
+    http_response_code(403);
+    echo json_encode(['error' => '前端面板未启用'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 // 仅允许配置域名跨域访问（而非通配符 *）
-$allowOrigin = $cfg['domain'] ?? '';
+// panel_origin 为前端面板域名（与短链跳转域名独立），未配置时回退使用 domain
+$allowOrigin = $cfg['panel_origin'] ?? '';
+if ($allowOrigin === '') {
+    $allowOrigin = $cfg['domain'] ?? '';
+}
 header('Access-Control-Allow-Origin: ' . $allowOrigin);
 header('Access-Control-Allow-Headers: Content-Type, X-Token');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(204); exit; }
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') { http_response_code(204); exit; }
 
 // 加载公共库
 require_once __DIR__ . '/helpers.php';
@@ -49,13 +62,16 @@ foreach ($checkFiles as $f) {
 
 // ── 认证解析（公共化，所有 api 接口共享）──────────────
 // php://input 只能读一次，提前缓存供 auth_extract 和业务文件使用
-$RAW_INPUT = file_get_contents('php://input');
+$RAW_INPUT = @file_get_contents('php://input');
+if ($RAW_INPUT === false) {
+    $RAW_INPUT = '';
+}
 
 require_once __DIR__ . '/../key/auth_extract.php';
 require_once __DIR__ . '/../key/auth_verify.php';
 
-// @外调用_&3：auth_extract — API 链路认证凭证提取
-$rawCredential = auth_extract($RAW_INPUT);
+// @外调用_&3：auth_extract — API 链路认证凭证提取（仅接受 X-Token / body.key）
+$rawCredential = auth_extract($RAW_INPUT, 'api');
 // @外调用_&4：auth_verify — API 链路认证凭证验证，返回 $authCtx
 $AUTH = auth_verify($rawCredential ?? '');
 

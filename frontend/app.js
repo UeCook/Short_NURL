@@ -275,7 +275,7 @@
     if (code) body.code = code;
 
     var btn = $("#createBtn");
-    if (!btn) return;
+    if (!btn) { showToast("界面异常，请刷新页面", "error"); return; }
     btn.disabled = true;
     btn.textContent = "创建中\u2026";
 
@@ -283,7 +283,12 @@
       .then(function (data) {
         if (data.synced === false) {
           // 热存储同步失败 — 短链已保存但暂不可用
-          showToast(data.error || "热存储同步失败，短链暂不可用", "error");
+          // 统一响应结构后告警信息在 warning 字段（向后兼容旧 error 字段）
+          showToast(data.warning || data.error || "热存储同步失败，短链暂不可用", "error");
+          showSuccessView(data.short_url, data.exp || null);
+        } else if (data.dedup === true) {
+          // 去重命中 — 复用了已有的永久短链
+          showToast("该链接已存在，已复用已有短链");
           showSuccessView(data.short_url, data.exp || null);
         } else {
           showToast("短链创建成功");
@@ -301,28 +306,30 @@
 
   /* ── 创建成功视图（创建后替换表单） ────────────────────── */
   function showSuccessView(shortUrl, exp) {
-    // 隐藏表单，显示成功视图
-    $("#createForm").classList.add("hidden");
-    $("#resultBox").classList.remove("visible");
-
+    var form = $("#createForm");
+    var resultBox = $("#resultBox");
     var sv = $("#successView");
-    $("#successUrl").textContent = shortUrl;
+    var urlEl = $("#successUrl");
     var expEl = $("#successExp");
+    if (!form || !sv || !urlEl) return;
+
+    form.classList.add("hidden");
+    if (resultBox) resultBox.classList.remove("visible");
+
+    urlEl.textContent = shortUrl;
     if (exp && exp !== "permanent") {
-      expEl.textContent = "过期: " + formatExp(exp);
-      expEl.style.display = "";
+      if (expEl) { expEl.textContent = "过期: " + formatExp(exp); expEl.style.display = ""; }
     } else {
-      expEl.textContent = "";
-      expEl.style.display = "none";
+      if (expEl) { expEl.textContent = ""; expEl.style.display = "none"; }
     }
     sv.classList.add("visible");
   }
 
   function hideSuccessView() {
-    // 显示表单，隐藏成功视图
-    $("#createForm").classList.remove("hidden");
-    $("#successView").classList.remove("visible");
-    // 聚焦链接输入框以便快速重新输入
+    var form = $("#createForm");
+    var sv = $("#successView");
+    if (form) form.classList.remove("hidden");
+    if (sv) sv.classList.remove("visible");
     var urlInput = $("#urlInput");
     if (urlInput) urlInput.focus();
   }
@@ -402,8 +409,13 @@
       .then(function (confirmed) {
         if (!confirmed) return;
         apiPost("/delete", { code: code, key: key })
-          .then(function () {
-            showToast("短链 " + code + " 已删除");
+          .then(function (data) {
+            // synced=false 表示冷存储已删但热存储未同步，缓存窗口内仍可能跳转
+            if (data.synced === false) {
+              showToast("短链 " + code + " 已删除，缓存可能有延迟", "error");
+            } else {
+              showToast("短链 " + code + " 已删除");
+            }
             refreshManageData();
           })
           .catch(function (err) { showToast(err.message || "删除失败", "error"); });
@@ -701,8 +713,10 @@
     initTabs();
     initListActions();
 
-    $("#themeToggle").addEventListener("click", toggleTheme);
-    $("#createForm").addEventListener("submit", handleCreate);
+    var themeToggle = $("#themeToggle");
+    if (themeToggle) themeToggle.addEventListener("click", toggleTheme);
+    var createForm = $("#createForm");
+    if (createForm) createForm.addEventListener("submit", handleCreate);
     // 成功视图按钮绑定
     var successCopyBtn = $("#successCopyBtn");
     if (successCopyBtn) {

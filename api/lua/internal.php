@@ -69,6 +69,11 @@ function internalStat($cfg) {
     $url = $host . '/internal/stat';
 
     $ch = curl_init($url);
+    if ($ch === false) {
+        $_lastInternalError = ['type' => 'curl', 'message' => 'cURL 初始化失败', 'http_code' => 0];
+        error_log("[internal_stat] cURL 初始化失败 ({$url})");
+        return null;
+    }
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => $timeout,
@@ -122,6 +127,11 @@ function internalPost($cfg, $path, $params = []) {
     $url = $host . $path;
 
     $ch = curl_init($url);
+    if ($ch === false) {
+        $_lastInternalError = ['type' => 'curl', 'message' => 'cURL 初始化失败', 'http_code' => 0];
+        error_log("[internal_post] cURL 初始化失败 ({$url})");
+        return null;
+    }
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => json_encode($params),

@@ -23,8 +23,12 @@ local function load_json(path)
     end
     local content = f:read("*a")
     f:close()
-    local data = cjson.decode(content)
+    if not content or content == "" then
+        return { v = 1, at = "0", d = {} }
+    end
+    local data, err = cjson.decode(content)
     if not data or type(data.d) ~= "table" then
+        ngx.log(ngx.WARN, "ShortURL: JSON decode failed for ", path, ": ", err or "unknown")
         return { v = 1, at = "0", d = {} }
     end
     return data
@@ -51,6 +55,8 @@ local function ensure_json(path, tz)
     local ok, err = os.rename(tmp, path)
     if not ok then
         ngx.log(ngx.ERR, "ShortURL: 重命名失败: ", tmp, " -> ", path, " err: ", err)
+        -- 清理残留临时文件，避免磁盘满等场景下 .lua.tmp 永久泄漏
+        os.remove(tmp)
     end
 end
 

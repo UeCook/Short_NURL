@@ -134,6 +134,10 @@ function headlessGet(string $domain, string $key, string $path): array
 {
     $url = $domain . '/headless/api' . $path;
     $ch = curl_init();
+    if ($ch === false) {
+        fwrite(STDERR, "错误：cURL 初始化失败\n");
+        exit(1);
+    }
     curl_setopt_array($ch, [
         CURLOPT_URL => $url,
         CURLOPT_RETURNTRANSFER => true,
@@ -162,6 +166,10 @@ function headlessPost(string $domain, string $key, string $path, array $payload)
     $url = $domain . '/headless/api' . $path;
     $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     $ch = curl_init();
+    if ($ch === false) {
+        fwrite(STDERR, "错误：cURL 初始化失败\n");
+        exit(1);
+    }
     curl_setopt_array($ch, [
         CURLOPT_URL => $url,
         CURLOPT_POST => true,
@@ -238,7 +246,9 @@ function doList(string $domain, string $key): void
         foreach ($temporary as $i => $t) {
             echo "  " . ($i + 1) . ". {$t['id']}  →  {$t['url']}\n";
             echo "     {$t['lurl']}\n";
-            echo "     过期：{$t['exp']}\n";
+            // exp 为 ISO 8601 字符串；null 防御（理论上有效临时短链不会为 null）
+            $expStr = $t['exp'] ?? '';
+            echo "     过期：" . ($expStr !== '' ? $expStr : '未知') . "\n";
         }
     }
     echo "\n";
@@ -267,10 +277,15 @@ function doGet(string $domain, string $key, string $code): void
     echo "  后缀：    {$data['id']}\n";
     echo "  目标：    {$data['url']}\n";
     echo "  短链：    {$data['lurl']}\n";
-    if (isset($data['exp']) && $data['exp'] !== 'permanent') {
-        echo "  过期：    {$data['exp']}\n";
-    } else {
+    // 统一 exp 语义：永久短链为 "permanent"，临时短链为 ISO 8601 字符串
+    $expVal = $data['exp'] ?? 'permanent';
+    if ($expVal === 'permanent') {
         echo "  类型：    永久\n";
+    } elseif ($expVal === null) {
+        // null 防御（get.php 中理论上不会出现，但契约允许）
+        echo "  类型：    未知\n";
+    } else {
+        echo "  过期：    {$expVal}\n";
     }
     echo "\n";
 }
@@ -296,10 +311,25 @@ function doAdd(string $domain, string $key, ?string $url, ?string $ttl, ?string 
     handleErrorResponse($resp);
 
     $data = $resp['body'];
-    echo "创建成功 ✓\n";
+    // 统一响应结构后，字段始终存在，根据语义选择性输出
+    if (isset($data['dedup']) && $data['dedup'] === true) {
+        echo "命中去重 ✓（复用已有永久短链，未实际写入）\n";
+    } else {
+        echo "创建成功 ✓\n";
+    }
     echo "  短链：{$data['short_url']}\n";
-    if (isset($data['exp'])) {
+    // exp 统一为 null（永久）或 ISO 8601 字符串（临时）
+    if (isset($data['exp']) && $data['exp'] !== null) {
         echo "  过期：{$data['exp']}\n";
+    }
+    // synced=false 表示热存储未同步，短链在缓存窗口内可能不可用
+    if (isset($data['synced']) && $data['synced'] === false) {
+        $warn = $data['warning'] ?? '热存储同步失败，短链暂不可用';
+        fwrite(STDERR, "  警告：{$warn}\n");
+    }
+    // key_consumed=true 表示消费了一次性 Key
+    if (isset($data['key_consumed']) && $data['key_consumed'] === true) {
+        echo "  注：本次请求已消费一次性 Key，该 Key 不可再次使用\n";
     }
     echo "\n";
 }
@@ -310,8 +340,14 @@ function doRm(string $domain, string $key, string $code): void
     $resp = headlessPost($domain, $key, '/delete', ['code' => $code]);
     handleErrorResponse($resp);
 
+    $data = $resp['body'];
     echo "删除成功 ✓\n";
-    echo "  已删除：{$code}\n\n";
+    echo "  已删除：{$code}\n";
+    // synced=false 表示热存储未同步，缓存窗口内短链仍可能跳转
+    if (isset($data['synced']) && $data['synced'] === false) {
+        fwrite(STDERR, "  警告：缓存可能有延迟，短链在短期内仍可能可访问\n");
+    }
+    echo "\n";
 }
 
 function showHelp(): void

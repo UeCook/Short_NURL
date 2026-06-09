@@ -18,25 +18,22 @@ $cold_temp = $tempStore->countActive();
 // @外调用_&14：internalStat — 无头配额接口读取热存储计数
 $stat = internalStat($cfg);
 
+// ── 响应输出 ─────────────────────────────────────────
+// 以冷存储为权威来源（与 api/routes/stat.php 保持一致），冷存 countActive() 是无状态遍历永不漂移
+// 热存储计数保留作为 hot_perm_count / hot_temp_count 供诊断
+$result = [
+    'perm_count'    => $cold_perm,
+    'temp_count'    => $cold_temp,
+    'perm_limit'    => $cfg['perm_limit'],
+    'temp_limit'    => $cfg['temp_limit'],
+    'hot_available' => ($stat !== null),
+];
+
 if ($stat) {
-    echo json_encode([
-        'perm_count'  => intval($stat['perm_count'] ?? 0),
-        'temp_count'  => intval($stat['temp_count'] ?? 0),
-        'cold_perm_count' => $cold_perm,
-        'cold_temp_count' => $cold_temp,
-        'perm_limit'  => $cfg['perm_limit'],
-        'temp_limit'  => $cfg['temp_limit'],
-        'hot_available' => true,
-    ], JSON_UNESCAPED_UNICODE);
+    $result['hot_perm_count'] = intval($stat['perm_count'] ?? 0);
+    $result['hot_temp_count'] = intval($stat['temp_count'] ?? 0);
 } else {
-    // 热存储不可用：主计数使用冷存储
-    echo json_encode([
-        'perm_count'  => $cold_perm,
-        'temp_count'  => $cold_temp,
-        'cold_perm_count' => $cold_perm,
-        'cold_temp_count' => $cold_temp,
-        'perm_limit'  => $cfg['perm_limit'],
-        'temp_limit'  => $cfg['temp_limit'],
-        'hot_available' => false,
-    ], JSON_UNESCAPED_UNICODE);
+    error_log("[headless_stat] 热存储不可用，使用冷存储计数：cold_perm={$cold_perm}, cold_temp={$cold_temp}");
 }
+
+echo json_encode($result, JSON_UNESCAPED_UNICODE);

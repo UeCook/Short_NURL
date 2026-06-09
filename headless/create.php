@@ -38,14 +38,18 @@ $isCustom = !empty($code);
 // ── 永久链去重（写入前查冷存储，URL 完全匹配则复用）──
 // @关键_$29：永久链去重 — ttl==0 且未传自定义短码时遍历 perm.json，URL 严格匹配则返回已有短码
 // 传了自定义短码说明用户有明确意图，去重不干预
+// 去重命中也返回固定响应结构（dedup=true），HTTP 统一为 200
 if (!$isTemp && !$isCustom) {
     $permData = $permStore->read();
     foreach ($permData as $existing) {
         if (isset($existing['url']) && $existing['url'] === $url) {
-            http_response_code(200);
             echo json_encode([
-                'short_url' => $existing['lurl'],
-                'dedup'     => true,
+                'short_url'    => $existing['lurl'],
+                'exp'          => null,
+                'dedup'        => true,
+                'synced'       => true,
+                'warning'      => null,
+                'key_consumed' => ($AUTH['type'] ?? null) === 'onetime',
             ], JSON_UNESCAPED_UNICODE);
             exit;
         }
@@ -55,7 +59,7 @@ if (!$isTemp && !$isCustom) {
 if ($isCustom) {
     $code = strtolower($code);
     if (!preg_match('/^[0-9a-z-]{1,4}$/', $code)) { hl_error('invalid_code', '后缀格式错误', 400); }
-    if (in_array($code, ['api','stat','admin','data','lua'])) { hl_error('reserved_code', '保留字', 400); }
+    if (in_array($code, $cfg['reserved_codes'])) { hl_error('reserved_code', '保留字', 400); }
 }
 
 $now = time();
@@ -105,7 +109,7 @@ try {
         $data[$code] = $entry;
         $store->writeLocked($data);
     }
-} catch (\RuntimeException $e) {
+} catch (\Exception $e) {
     error_log('[safe_write] ' . $e->getMessage());
     hl_error('write_failed', '服务器内部错误', 500);
 } finally { $store->lockEnd(); }
@@ -116,27 +120,27 @@ if ($errorResponse) {
 
 // @外调用_&12：internalSet — 无头创建接口写入热存储
 $synced = internalSet($cfg, $code, $url, $isTemp ? $ttl : 0, $exp_str);
+$warning = null;
 if (!$synced) {
     $detail = getLastInternalError();
     $diagMsg = $detail ? $detail['message'] : '未知错误';
     error_log("[headless_create] 热存储同步失败：code={$code}，原因：{$diagMsg}");
+    $warning = '热存储同步失败：短链已保存但暂不可用，请稍后重试';
 }
 
-if (!$synced) {
-    // 冷存储已写入但热存储同步失败 — 返回 HTTP 207 (Multi-Status)
-    http_response_code(207);
-    $resp = [
-        'short_url' => $shortUrl,
-        'synced' => false,
-        'warning' => '热存储同步失败：短链已保存但暂不可用，请稍后重试',
-    ];
-    if ($isTemp) $resp['exp'] = $exp_str;
-    echo json_encode($resp, JSON_UNESCAPED_UNICODE);
-} else {
-    http_response_code(201);
-    if ($isTemp) {
-        echo json_encode(['short_url'=>$shortUrl,'exp'=>$exp_str], JSON_UNESCAPED_UNICODE);
-    } else {
-        echo json_encode(['short_url'=>$shortUrl], JSON_UNESCAPED_UNICODE);
-    }
-}
+// ── 统一响应结构 ─────────────────────────────────────
+// 所有成功路径（新建 / 去重 / 同步失败）均返回固定字段集合，HTTP 统一为 200。
+// 语义信息通过字段传达，不再用 201/207 区分：
+//   - exp:          临时短链为 ISO 8601 字符串；永久短链为 null
+//   - dedup:        true 表示命中永久链去重（未实际写入）
+//   - synced:       false 表示冷存储已写但热存储同步失败（缓存窗口内可能跳不通）
+//   - warning:      非 null 时为人类可读的同步告警（仅 synced=false 时有值）
+//   - key_consumed: true 表示本次请求消费了一次性 Key
+echo json_encode([
+    'short_url'    => $shortUrl,
+    'exp'          => $isTemp ? $exp_str : null,
+    'dedup'        => false,
+    'synced'       => $synced,
+    'warning'      => $warning,
+    'key_consumed' => ($AUTH['type'] ?? null) === 'onetime',
+], JSON_UNESCAPED_UNICODE);

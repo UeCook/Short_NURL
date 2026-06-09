@@ -34,6 +34,27 @@ function M.handle()
 
     local code = params.code
     local forced_type = params.type  -- "perm" or "temp" from PHP (authoritative)
+
+    -- ── 输入验证（信任边界：PHP 是低特权调用方，Lua 侧必须独立防守）──
+    -- code：与 PHP create.php 完全对齐 ^[0-9a-z-]{1,4}$
+    if type(code) ~= "string" or not code:match("^[0-9a-z%-]{1,4}$") then
+        ngx.status = 400
+        ngx.header["Content-Type"] = "application/json"
+        ngx.say('{"error":"invalid code"}')
+        ngx.exit(400)
+        return
+    end
+
+    -- type：只能是 nil（降级回退）或 "perm" 或 "temp"，杜绝非对称分支被滥用
+    if forced_type ~= nil and forced_type ~= "perm" and forced_type ~= "temp" then
+        ngx.status = 400
+        ngx.header["Content-Type"] = "application/json"
+        ngx.say('{"error":"invalid type"}')
+        ngx.exit(400)
+        return
+    end
+    -- ── 验证结束 ──────────────────────────────────────────────
+
     local su_url = ngx.shared.su_url
     local su_exp = ngx.shared.su_exp
     local su_meta = ngx.shared.su_meta
@@ -64,8 +85,9 @@ function M.handle()
     if count_key then
         local new_val, err = su_meta:incr(count_key, -1)
         if not new_val then
-            -- incr failed (key may not exist), use add to initialize to 0
-            su_meta:add(count_key, 0)
+            -- incr failed (key missing or value corrupted), force reset to 0
+            ngx.log(ngx.WARN, "ShortURL: delete incr failed for ", count_key, ": ", tostring(err))
+            su_meta:set(count_key, 0)
         elseif new_val < 0 then
             -- Count went negative (drift), reset to 0
             su_meta:set(count_key, 0)

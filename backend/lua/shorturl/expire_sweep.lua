@@ -68,9 +68,11 @@ function M.run(premature)
         -- Decrement temp_count
         local new_val, err = su_meta:incr("temp_count", -deleted)
         if not new_val then
-            -- incr failed (key may not exist), use add to initialize to 0
-            -- add only succeeds if key doesn't exist, avoiding reset of existing counts
-            su_meta:add("temp_count", 0)
+            -- incr 失败：key 不存在或值非数值（被意外写入了非数值）。
+            -- 统一用 set 重置为 0，并记录警告。
+            -- 注意：旧实现用 add，但 add 在 key 已存在（值损坏）时会静默失败，计数不被修复。
+            ngx.log(ngx.WARN, "ShortURL: expire_sweep incr failed (", tostring(err), "), resetting temp_count to 0")
+            su_meta:set("temp_count", 0)
         elseif new_val < 0 then
             -- Count went negative (drift), reset to 0
             su_meta:set("temp_count", 0)

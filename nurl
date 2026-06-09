@@ -31,11 +31,11 @@ define('NURL_VERSION', '1.2');
 
 $cliCustomVersion = <<<VERSION
 Short_NURL_Uecook
-  API：v1.5
-  webUI：v1.3
-  HeadLess：v1.0
-  Lua：v1.1
-  CLI：v1.2
+  API：v1.9
+  webUI：v1.4
+  HeadLess：v1.6
+  Lua：v1.3
+  CLI：v1.3
 ---------------------------
 GitHub：https://uoca.top
 VERSION;
@@ -51,16 +51,14 @@ if (!file_exists($configPath)) {
 $cfg = require $configPath;
 
 require_once $apiDir . '/common/helpers.php';
-require_once $apiDir . '/common/keys.php';
-require_once $apiDir . '/common/json_store.php';
+require_once $apiDir . '/key/keys.php';
+require_once $apiDir . '/storage/json_store.php';
 
 $keyStore = new KeyStore(
     $cfg['keys_path'],
     $cfg['tz_offset'],
     $cfg['key_ttl_days'],
-    $cfg['onetime_pool_size'],
-    $cfg['key_charset'],
-    $cfg['key_length']
+    $cfg['onetime_pool_size']
 );
 
 // ── 解析参数 ─────────────────────────────────────────────
@@ -240,7 +238,6 @@ function doSweep(array $cfg): void
             echo "剩余：{$after} 条。\n";
         }
     } catch (\RuntimeException $e) {
-        $tempStore->lockEnd();
         fwrite(STDERR, "错误：" . $e->getMessage() . "\n");
         exit(1);
     } finally {

@@ -25,7 +25,9 @@ class JsonStore {
 
     public function __construct($path, $tz_offset = '+08:00') {
         $dir = dirname($path);
-        if (!is_dir($dir)) mkdir($dir, 0755, true);
+        if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
+            throw new \RuntimeException("无法创建目录: {$dir}");
+        }
         $this->path = $path;
         $this->tz_offset = $tz_offset;
     }
@@ -44,7 +46,11 @@ class JsonStore {
         if (!file_exists($this->path)) {
             return [];
         }
-        $raw = file_get_contents($this->path);
+        $raw = @file_get_contents($this->path);
+        if ($raw === false) {
+            error_log("[json_store] 文件读取失败，路径: {$this->path}");
+            return [];
+        }
         $data = json_decode($raw, true);
         if (!is_array($data) || !isset($data['d']) || !is_array($data['d'])) {
             // 文件存在但内容损坏，记录日志（read 不抛异常，因为不直接触发写入）
@@ -161,8 +167,8 @@ class JsonStore {
     public function lockBegin() {
         // 确保目录存在（防止运行时目录被意外删除导致 fopen 失败）
         $dir = dirname($this->path);
-        if (!is_dir($dir)) {
-            mkdir($dir, 0755, true);
+        if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
+            throw new \RuntimeException("无法创建目录: {$dir}");
         }
         $this->lockFp = fopen($this->path, 'c+');
         if (!$this->lockFp) {

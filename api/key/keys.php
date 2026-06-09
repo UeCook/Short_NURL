@@ -49,7 +49,9 @@ class KeyStore {
 
     public function __construct($path, $tz_offset = '+08:00', $ttlDays = 7, $poolSize = 20) {
         $dir = dirname($path);
-        if (!is_dir($dir)) mkdir($dir, 0755, true);
+        if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
+            throw new \RuntimeException("无法创建目录: {$dir}");
+        }
         $this->path = $path;
         $this->tz_offset = $tz_offset;
         $this->ttlDays = $ttlDays;
@@ -77,7 +79,11 @@ class KeyStore {
         if (!file_exists($this->path)) {
             return ['resident' => null, 'onetime_pool' => []];
         }
-        $raw = file_get_contents($this->path);
+        $raw = @file_get_contents($this->path);
+        if ($raw === false) {
+            error_log("[key_readFile] 文件读取失败: " . $this->path);
+            return ['resident' => null, 'onetime_pool' => []];
+        }
         $data = json_decode($raw, true);
         if (!is_array($data)) {
             error_log("[key_readFile] keys.json 解码失败，内容可能损坏: " . $this->path);
@@ -205,7 +211,9 @@ class KeyStore {
 // @关键_$28：withLock — 在 flock 排他锁内执行回调（保证 CLI 与 API 操作互斥，统一 inode）
     private function withLock($callback) {
         $dir = dirname($this->path);
-        if (!is_dir($dir)) mkdir($dir, 0755, true);
+        if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
+            throw new \RuntimeException("无法创建目录: {$dir}");
+        }
         $fp = fopen($this->path, 'c+');
         if (!$fp) throw new \RuntimeException("无法打开文件获取锁: " . $this->path);
         flock($fp, LOCK_EX);
