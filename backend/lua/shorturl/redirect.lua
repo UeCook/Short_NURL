@@ -18,7 +18,7 @@ function M.go()
     local su_url = ngx.shared.su_url
     local target = su_url:get(code)
 
-    if not target then
+    if type(target) ~= "string" or target == "" then
         ngx.redirect("/404.html")
         return
     end

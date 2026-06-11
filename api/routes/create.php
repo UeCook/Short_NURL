@@ -49,7 +49,7 @@ $isCustom = !empty($code);
 if (!$isTemp && !$isCustom) {
     $permData = $permStore->read();
     foreach ($permData as $existing) {
-        if (isset($existing['url']) && $existing['url'] === $url) {
+        if (isset($existing['url'], $existing['lurl']) && $existing['url'] === $url) {
             echo json_encode([
                 'short_url'    => $existing['lurl'],
                 'exp'          => null,

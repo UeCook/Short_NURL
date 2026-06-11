@@ -37,8 +37,9 @@ function M.handle()
     local MAX_URL_LEN = 2048
     local MAX_TTL = 365 * 24 * 3600  -- 与 PHP config ttl_max 保持一致
 
-    -- code：与 PHP create.php 完全对齐 ^[0-9a-z-]{1,4}$
-    if type(code) ~= "string" or not code:match("^[0-9a-z%-]{1,4}$") then
+    -- code：与 PHP create.php 完全对齐 ^[0-9a-z-]{1,4}$（Lua 模式无 {n,m}，展开写法）
+    if type(code) ~= "string"
+       or not code:match("^[0-9a-z%-][0-9a-z%-]?[0-9a-z%-]?[0-9a-z%-]?$") then
         ngx.status = 400
         ngx.header["Content-Type"] = "application/json"
         ngx.say('{"error":"invalid code"}')

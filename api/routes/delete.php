@@ -63,7 +63,7 @@ if ($isTemp) {
         // 删除时顺便清理过期条目
         cleanExpiredEntries($tempData);
         $tempStore->writeLocked($tempData);
-    } catch (\RuntimeException $e) {
+    } catch (\Throwable $e) {
         error_log('[safe_write] ' . $e->getMessage());
         http_response_code(500);
         echo json_encode(['error' => '服务器内部错误'], JSON_UNESCAPED_UNICODE);
@@ -81,7 +81,7 @@ if ($isTemp) {
         }
         unset($permData[$code]);
         $permStore->writeLocked($permData);
-    } catch (\RuntimeException $e) {
+    } catch (\Throwable $e) {
         error_log('[safe_write] ' . $e->getMessage());
         http_response_code(500);
         echo json_encode(['error' => '服务器内部错误'], JSON_UNESCAPED_UNICODE);
