@@ -19,6 +19,8 @@
 
 ## English / 英语
 
+>The following translation was done by Gemini 3.5 and is for reference only.
+
 ## 1. Project Introduction
 
 **Short_NURL** is a short URL service designed for personal use cases. It aims to achieve high performance, low resource consumption, a clear structure, and simple deployment while maintaining a "near-native" technology stack.
