@@ -390,5 +390,7 @@ function showHelp(): void
     echo "  -v            查看版本\n";
     echo "  -insecure     跳过 SSL 证书验证（仅用于内网/自签名证书）\n";
     echo "  -h / -help    显示此帮助信息\n\n";
+    echo "支持的密钥类型：常驻密钥、一次性密钥、服务密钥\n";
+    echo "  服务密钥仅限无头模式使用，前端 API 将拒绝服务密钥。\n\n";
     echo "本地密钥管理请使用：php nurl\n";
 }

@@ -247,7 +247,8 @@ function doSvc(KeyStore $ks, array $cfg): void
         echo "  $serviceKey\n";
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
         echo "此密钥永不过期，不限使用次数，适用于服务间集成。\n";
-        echo "请将此密钥配置到博客项目的环境变量中。\n";
+        echo "仅限无头模式使用（nurl-key / X-Headless-Token），前端 API 将拒绝此密钥。\n";
+        echo "请将此密钥配置到需要调用短链 API 的服务环境变量中。\n";
         echo "请立即保存，之后将不再显示。\n\n";
     } catch (\RuntimeException $e) {
         fwrite(STDERR, "错误：" . $e->getMessage() . "\n");
@@ -268,7 +269,7 @@ function doDrop(KeyStore $ks, string $target): void
     } elseif ($target === 'onetime') {
         echo "所有一次性密钥已被撤销。请使用 'php nurl -full' 补充新密钥。\n";
     } elseif ($target === 'service') {
-        echo "服务密钥已被撤销。请使用 'php nurl -svc' 生成新密钥，并更新博客环境变量。\n";
+        echo "服务密钥已被撤销。请使用 'php nurl -svc' 生成新密钥，并更新对应服务的环境变量。\n";
     }
 }
 
