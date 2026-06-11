@@ -9,10 +9,13 @@
  *   -new          生成常驻密钥 + 补充一次性密钥池
  *   -long         仅轮换常驻密钥
  *   -full         仅补充一次性密钥池
+ *   -svc          生成服务密钥（永不过期，用于服务间集成）
+ *   -svc -label:X 指定服务密钥标签（默认 default）
  *   -look         显示密钥状态（不显示明文）
  *   -drop         撤销所有密钥
  *   -drop -long   仅删除常驻密钥
  *   -drop -full   仅删除所有一次性密钥
+ *   -drop -svc    仅删除服务密钥
  *   -sweep        清理过期临时短链
  *   -v            查看版本
  *   -h / -help    显示帮助信息
@@ -72,6 +75,7 @@ if (empty($args)) {
 $hasNew  = in_array('-new', $args);
 $hasLong = in_array('-long', $args);
 $hasFull = in_array('-full', $args);
+$hasSvc  = in_array('-svc', $args);
 $hasLook = in_array('-look', $args);
 $hasDrop = in_array('-drop', $args);
 $hasSweep = in_array('-sweep', $args);
@@ -96,7 +100,22 @@ if ($hasSweep) {
 }
 
 if ($hasDrop) {
-    doDrop($keyStore, $hasLong, $hasFull);
+    $dropTargets = array_filter([
+        $hasLong ? 'resident' : null,
+        $hasFull ? 'onetime' : null,
+        $hasSvc  ? 'service' : null,
+    ]);
+    if (count($dropTargets) > 1) {
+        fwrite(STDERR, "错误：-drop 一次只能指定一个目标（-long / -full / -svc）\n");
+        exit(1);
+    }
+    $target = $dropTargets ? reset($dropTargets) : 'all';
+    doDrop($keyStore, $target);
+    exit(0);
+}
+
+if ($hasSvc && !$hasDrop) {
+    doSvc($keyStore, $cfg);
     exit(0);
 }
 
@@ -184,6 +203,18 @@ function doLook(KeyStore $ks, array $cfg): void
     }
     echo "\n";
 
+    if ($status['service'] === null) {
+        echo "  服务密钥：（未设置）\n";
+    } else {
+        $s = $status['service'];
+        echo "  服务密钥：\n";
+        echo "    前缀：      {$s['prefix']}\n";
+        echo "    创建时间：  {$s['created']}\n";
+        echo "    标签：      {$s['label']}\n";
+        echo "    有效期：    永不过期\n";
+    }
+    echo "\n";
+
     $count = $status['onetime_count'];
     $max = $status['onetime_pool_size'];
     echo "  一次性密钥池：{$count}/{$max} 个密钥\n";
@@ -197,26 +228,47 @@ function doLook(KeyStore $ks, array $cfg): void
     echo "\n";
 }
 
-function doDrop(KeyStore $ks, bool $longOnly, bool $fullOnly): void
+function doSvc(KeyStore $ks, array $cfg): void
 {
-    if ($longOnly && $fullOnly) {
-        fwrite(STDERR, "错误：-long 和 -full 不能同时使用\n");
-        exit(1);
+    global $args;
+    $label = 'default';
+    foreach ($args as $i => $arg) {
+        if (strpos($arg, '-label:') === 0) {
+            $label = substr($arg, 7);
+            break;
+        }
     }
 
-    $target = 'all';
-    if ($longOnly) $target = 'resident';
-    if ($fullOnly) $target = 'onetime';
+    echo "正在生成服务密钥" . ($label !== 'default' ? "（标签：{$label}）" : '') . "...\n\n";
 
+    try {
+        $serviceKey = $ks->generateService($label);
+        echo "━━━ 服务密钥 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+        echo "  $serviceKey\n";
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+        echo "此密钥永不过期，不限使用次数，适用于服务间集成。\n";
+        echo "请将此密钥配置到博客项目的环境变量中。\n";
+        echo "请立即保存，之后将不再显示。\n\n";
+    } catch (\RuntimeException $e) {
+        fwrite(STDERR, "错误：" . $e->getMessage() . "\n");
+        fwrite(STDERR, "请先使用 'php nurl -drop -svc' 撤销旧的服务密钥。\n");
+        exit(1);
+    }
+}
+
+function doDrop(KeyStore $ks, string $target): void
+{
     $ks->revoke($target);
     echo "已撤销：$target\n";
 
     if ($target === 'all') {
-        echo "所有 API 密钥已被撤销。在生成新密钥之前，请求将返回 406。\n";
+        echo "所有 API 密钥（含服务密钥）已被撤销。在生成新密钥之前，请求将返回 406。\n";
     } elseif ($target === 'resident') {
         echo "常驻密钥已被撤销。请使用 'php nurl -long' 生成新密钥。\n";
-    } else {
+    } elseif ($target === 'onetime') {
         echo "所有一次性密钥已被撤销。请使用 'php nurl -full' 补充新密钥。\n";
+    } elseif ($target === 'service') {
+        echo "服务密钥已被撤销。请使用 'php nurl -svc' 生成新密钥，并更新博客环境变量。\n";
     }
 }
 
@@ -253,10 +305,13 @@ function showHelp(): void
     echo "  -new          生成常驻密钥 + 补充一次性密钥池\n";
     echo "  -long         仅轮换常驻密钥\n";
     echo "  -full         仅补充一次性密钥池\n";
+    echo "  -svc          生成服务密钥（永不过期，用于服务间集成）\n";
+    echo "  -svc -label:X 指定服务密钥标签（默认 default）\n";
     echo "  -look         显示密钥状态（不显示明文）\n";
     echo "  -drop         撤销所有密钥\n";
     echo "  -drop -long   仅删除常驻密钥\n";
-    echo "  -drop -full   仅删除所有一次性密钥\n\n";
+    echo "  -drop -full   仅删除所有一次性密钥\n";
+    echo "  -drop -svc    仅删除服务密钥\n";
     echo "数据维护：\n";
     echo "  -sweep        清理过期临时短链\n\n";
     echo "其他：\n";

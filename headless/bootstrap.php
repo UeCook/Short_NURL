@@ -50,18 +50,19 @@ if (!checkDataAccess($cfg)) {
 
 // ── 认证解析（与 api 链路共享同一套公共函数）─────────
 // php://input 只能读一次，提前缓存
-$RAW_INPUT = @file_get_contents('php://input');
-if ($RAW_INPUT === false) {
-    $RAW_INPUT = '';
+// 显式写入 $GLOBALS 避免被函数内 require 时局部作用域导致 $GLOBALS['RAW_INPUT'] 为空
+$GLOBALS['RAW_INPUT'] = @file_get_contents('php://input');
+if ($GLOBALS['RAW_INPUT'] === false) {
+    $GLOBALS['RAW_INPUT'] = '';
 }
 
 require_once __DIR__ . '/../api/key/auth_extract.php';
 require_once __DIR__ . '/../api/key/auth_verify.php';
 
 // @外调用_&5：auth_extract — 无头链路认证凭证提取（仅接受 X-Headless-Token）
-$rawCredential = auth_extract($RAW_INPUT, 'headless');
+$rawCredential = auth_extract($GLOBALS['RAW_INPUT'], 'headless');
 // @外调用_&6：auth_verify — 无头链路认证凭证验证，返回 $authCtx
-$AUTH = auth_verify($rawCredential ?? '');
+$AUTH = auth_verify($rawCredential ?? '', 'headless');
 
 if (!$AUTH['valid']) {
     if ($AUTH['reason'] === 'missing') {

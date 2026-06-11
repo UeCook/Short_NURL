@@ -93,16 +93,24 @@ function M.init()
     local perm_count = 0
     local temp_count = 0
 
-    -- Load permanent URLs
-    local perm_data = load_json(perm_path)
+    -- Load permanent URLs (protected — failure falls back to count=0)
+    local perm_ok, perm_data = pcall(load_json, perm_path)
+    if not perm_ok then
+        ngx.log(ngx.ERR, "ShortURL: 加载 perm.json 失败: ", tostring(perm_data), "，perm_count 将为 0")
+        perm_data = { v = 1, at = "0", d = {} }
+    end
     for code, entry in pairs(perm_data.d) do
         su_url:set(code, entry.url, 0)
         su_exp:set(code, "0", 0)
         perm_count = perm_count + 1
     end
 
-    -- Load temporary URLs
-    local temp_data = load_json(temp_path)
+    -- Load temporary URLs (protected — failure falls back to count=0)
+    local temp_ok, temp_data = pcall(load_json, temp_path)
+    if not temp_ok then
+        ngx.log(ngx.ERR, "ShortURL: 加载 temp.json 失败: ", tostring(temp_data), "，temp_count 将为 0")
+        temp_data = { v = 1, at = "0", d = {} }
+    end
     for code, entry in pairs(temp_data.d) do
         local t = entry.t  -- ISO 8601 expiration string
         if t and t ~= "0" then

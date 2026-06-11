@@ -39,16 +39,25 @@ $isCustom = !empty($code);
 // @关键_$29：永久链去重 — ttl==0 且未传自定义短码时遍历 perm.json，URL 严格匹配则返回已有短码
 // 传了自定义短码说明用户有明确意图，去重不干预
 // 去重命中也返回固定响应结构（dedup=true），HTTP 统一为 200
+// 调用 internalSet 确保热存储同步（防止冷启动后热存储缺失该条目）
 if (!$isTemp && !$isCustom) {
     $permData = $permStore->read();
-    foreach ($permData as $existing) {
+    foreach ($permData as $dedupCode => $existing) {
         if (isset($existing['url'], $existing['lurl']) && $existing['url'] === $url) {
+            $dedupSynced = internalSet($cfg, $dedupCode, $existing['url'], 0, '0');
+            $dedupWarning = null;
+            if (!$dedupSynced) {
+                $detail = getLastInternalError();
+                $diagMsg = $detail ? $detail['message'] : '未知错误';
+                error_log("[headless_create] 去重路径热存储同步失败：code={$dedupCode}，原因：{$diagMsg}");
+                $dedupWarning = '热存储同步失败：短链暂不可用，请稍后重试';
+            }
             echo json_encode([
                 'short_url'    => $existing['lurl'],
                 'exp'          => null,
                 'dedup'        => true,
-                'synced'       => true,
-                'warning'      => null,
+                'synced'       => $dedupSynced,
+                'warning'      => $dedupWarning,
                 'key_consumed' => ($AUTH['type'] ?? null) === 'onetime',
             ], JSON_UNESCAPED_UNICODE);
             exit;

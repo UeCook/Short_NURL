@@ -62,23 +62,26 @@ foreach ($checkFiles as $f) {
 
 // ── 认证解析（公共化，所有 api 接口共享）──────────────
 // php://input 只能读一次，提前缓存供 auth_extract 和业务文件使用
-$RAW_INPUT = @file_get_contents('php://input');
-if ($RAW_INPUT === false) {
-    $RAW_INPUT = '';
+// 显式写入 $GLOBALS 避免被函数内 require 时局部作用域导致 $GLOBALS['RAW_INPUT'] 为空
+$GLOBALS['RAW_INPUT'] = @file_get_contents('php://input');
+if ($GLOBALS['RAW_INPUT'] === false) {
+    $GLOBALS['RAW_INPUT'] = '';
 }
 
 require_once __DIR__ . '/../key/auth_extract.php';
 require_once __DIR__ . '/../key/auth_verify.php';
 
 // @外调用_&3：auth_extract — API 链路认证凭证提取（仅接受 X-Token / body.key）
-$rawCredential = auth_extract($RAW_INPUT, 'api');
+$rawCredential = auth_extract($GLOBALS['RAW_INPUT'], 'api');
 // @外调用_&4：auth_verify — API 链路认证凭证验证，返回 $authCtx
-$AUTH = auth_verify($rawCredential ?? '');
+$AUTH = auth_verify($rawCredential ?? '', 'api');
 
 if (!$AUTH['valid']) {
     http_response_code(406);
     if ($AUTH['reason'] === 'missing') {
         echo json_encode(['error' => '缺少密钥'], JSON_UNESCAPED_UNICODE);
+    } elseif ($AUTH['reason'] === 'wrong_channel') {
+        echo json_encode(['error' => '服务密钥不可用于前端API链路'], JSON_UNESCAPED_UNICODE);
     } else {
         echo json_encode(['error' => '密钥失效或不正确'], JSON_UNESCAPED_UNICODE);
     }

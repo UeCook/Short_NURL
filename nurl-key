@@ -50,6 +50,7 @@ $hasStat = in_array('-stat', $args);
 $hasGet  = in_array('-get', $args);
 $hasAdd  = in_array('-add', $args);
 $hasRm   = in_array('-rm', $args);
+$insecureMode = in_array('-insecure', $args);
 
 // 提取 -key 值
 $key = extractValue($args, '-key');
@@ -81,15 +82,15 @@ if (!$key) {
 }
 
 if ($hasList) {
-    doList($domain, $key);
+    doList($domain, $key, $insecureMode);
 } elseif ($hasStat) {
-    doStat($domain, $key);
+    doStat($domain, $key, $insecureMode);
 } elseif ($hasGet && $getCode) {
-    doGet($domain, $key, $getCode);
+    doGet($domain, $key, $getCode, $insecureMode);
 } elseif ($hasAdd) {
-    doAdd($domain, $key, $addUrl, $addTtl, $addCode);
+    doAdd($domain, $key, $addUrl, $addTtl, $addCode, $insecureMode);
 } elseif ($hasRm && $rmCode) {
-    doRm($domain, $key, $rmCode);
+    doRm($domain, $key, $rmCode, $insecureMode);
 } else {
     fwrite(STDERR, "错误：未指定有效操作。\n");
     fwrite(STDERR, "运行 'php nurl-key -h' 查看用法。\n");
@@ -108,17 +109,18 @@ if ($hasList) {
  */
 function extractValue(array $args, string $flag): ?string
 {
+    static $knownFlags = [
+        '-key', '-get', '-url', '-ttl', '-code',
+        '-add', '-rm', '-list', '-stat', '-h', '-help', '-v', '-insecure',
+    ];
     $colonPrefix = $flag . ':';
     foreach ($args as $i => $arg) {
-        // -flag:"value" 格式
         if (strpos($arg, $colonPrefix) === 0) {
             return substr($arg, strlen($colonPrefix));
         }
-        // -flag "value" 格式
         if ($arg === $flag && isset($args[$i + 1])) {
             $next = $args[$i + 1];
-            // 下一个参数不能是标志（以 - 开头）
-            if (strpos($next, '-') !== 0) {
+            if (!in_array($next, $knownFlags, true)) {
                 return $next;
             }
         }
@@ -130,7 +132,7 @@ function extractValue(array $args, string $flag): ?string
 // ── HTTP 请求辅助 ─────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════
 
-function headlessGet(string $domain, string $key, string $path): array
+function headlessGet(string $domain, string $key, string $path, bool $insecure = false): array
 {
     $url = $domain . '/headless/api' . $path;
     $ch = curl_init();
@@ -142,7 +144,8 @@ function headlessGet(string $domain, string $key, string $path): array
         CURLOPT_URL => $url,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 10,
-        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYPEER => !$insecure,
+        CURLOPT_SSL_VERIFYHOST => $insecure ? 0 : 2,
         CURLOPT_HTTPHEADER => [
             'X-Headless-Token: ' . $key,
         ],
@@ -161,7 +164,7 @@ function headlessGet(string $domain, string $key, string $path): array
     return ['code' => $httpCode, 'body' => $data, 'raw' => $body];
 }
 
-function headlessPost(string $domain, string $key, string $path, array $payload): array
+function headlessPost(string $domain, string $key, string $path, array $payload, bool $insecure = false): array
 {
     $url = $domain . '/headless/api' . $path;
     $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -176,7 +179,8 @@ function headlessPost(string $domain, string $key, string $path, array $payload)
         CURLOPT_POSTFIELDS => $json,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 10,
-        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYPEER => !$insecure,
+        CURLOPT_SSL_VERIFYHOST => $insecure ? 0 : 2,
         CURLOPT_HTTPHEADER => [
             'Content-Type: application/json',
             'X-Headless-Token: ' . $key,
@@ -203,11 +207,18 @@ function handleErrorResponse(array $resp): void
 
     if ($httpCode >= 400) {
         if ($body && isset($body['error'])) {
-            fwrite(STDERR, "错误 ({$body['error']}): {$body['message']} [HTTP $httpCode]\n");
+            $msg = $body['message'] ?? '(无详细信息)';
+            fwrite(STDERR, "错误 ({$body['error']}): {$msg} [HTTP $httpCode]\n");
         } else {
             fwrite(STDERR, "错误：HTTP $httpCode\n");
             if ($resp['raw']) fwrite(STDERR, "响应：{$resp['raw']}\n");
         }
+        exit(1);
+    }
+
+    if (!is_array($body)) {
+        fwrite(STDERR, "错误：服务端返回非预期格式 [HTTP $httpCode]\n");
+        if ($resp['raw']) fwrite(STDERR, "响应：{$resp['raw']}\n");
         exit(1);
     }
 }
@@ -216,9 +227,9 @@ function handleErrorResponse(array $resp): void
 // ── 命令实现 ──────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════
 
-function doList(string $domain, string $key): void
+function doList(string $domain, string $key, bool $insecure = false): void
 {
-    $resp = headlessGet($domain, $key, '/list');
+    $resp = headlessGet($domain, $key, '/list', $insecure);
     handleErrorResponse($resp);
 
     $data = $resp['body'];
@@ -254,9 +265,9 @@ function doList(string $domain, string $key): void
     echo "\n";
 }
 
-function doStat(string $domain, string $key): void
+function doStat(string $domain, string $key, bool $insecure = false): void
 {
-    $resp = headlessGet($domain, $key, '/stat');
+    $resp = headlessGet($domain, $key, '/stat', $insecure);
     handleErrorResponse($resp);
 
     $data = $resp['body'];
@@ -266,9 +277,9 @@ function doStat(string $domain, string $key): void
     echo "  临时短链：{$data['temp_count']} / {$data['temp_limit']}\n";
 }
 
-function doGet(string $domain, string $key, string $code): void
+function doGet(string $domain, string $key, string $code, bool $insecure = false): void
 {
-    $resp = headlessGet($domain, $key, '/get/' . $code);
+    $resp = headlessGet($domain, $key, '/get/' . $code, $insecure);
     handleErrorResponse($resp);
 
     $data = $resp['body'];
@@ -290,7 +301,7 @@ function doGet(string $domain, string $key, string $code): void
     echo "\n";
 }
 
-function doAdd(string $domain, string $key, ?string $url, ?string $ttl, ?string $code): void
+function doAdd(string $domain, string $key, ?string $url, ?string $ttl, ?string $code, bool $insecure = false): void
 {
     if (!$url) {
         fwrite(STDERR, "错误：缺少目标链接。请使用 -url \"https://...\" 指定。\n");
@@ -307,7 +318,7 @@ function doAdd(string $domain, string $key, ?string $url, ?string $ttl, ?string 
     }
 
     echo "正在创建短链...\n";
-    $resp = headlessPost($domain, $key, '/create', $payload);
+    $resp = headlessPost($domain, $key, '/create', $payload, $insecure);
     handleErrorResponse($resp);
 
     $data = $resp['body'];
@@ -334,10 +345,10 @@ function doAdd(string $domain, string $key, ?string $url, ?string $ttl, ?string 
     echo "\n";
 }
 
-function doRm(string $domain, string $key, string $code): void
+function doRm(string $domain, string $key, string $code, bool $insecure = false): void
 {
     echo "正在删除短链 {$code}...\n";
-    $resp = headlessPost($domain, $key, '/delete', ['code' => $code]);
+    $resp = headlessPost($domain, $key, '/delete', ['code' => $code], $insecure);
     handleErrorResponse($resp);
 
     $data = $resp['body'];
@@ -377,6 +388,7 @@ function showHelp(): void
     echo "  604800    7 天\n\n";
     echo "其他：\n";
     echo "  -v            查看版本\n";
+    echo "  -insecure     跳过 SSL 证书验证（仅用于内网/自签名证书）\n";
     echo "  -h / -help    显示此帮助信息\n\n";
     echo "本地密钥管理请使用：php nurl\n";
 }

@@ -13,6 +13,7 @@ require_once __DIR__ . '/base58.php';
  *   - 常驻 Key（Resident）：单个密钥，7 天有效期，不限使用次数
  *   - 一次性 Key 池（Onetime Pool）：最多 N 个（默认 20），用前永不过期，
  *     使用后自动销毁（不自动补充，需 CLI 手动补充）
+ *   - 服务 Key（Service）：永不过期，不限使用次数，专用于服务间集成
  *
  * 写入保护（v2.1 safe_write 规范）：
  *   所有写入操作（writeLockedFile）均包含备份 + 验证 + 回滚三层保护
@@ -32,6 +33,12 @@ require_once __DIR__ . '/base58.php';
  *       "created": "2026-05-17T10:00:00+08:00"
  *     }
  *   ],
+ *   "service": {
+ *     "key_hash": "<sha256>",
+ *     "key_prefix": "su_P4qR",
+ *     "created": "2026-06-10T10:00:00+08:00",
+ *     "label": "blog-integration"
+ *   }
  * }
  *
  * 安全设计：
@@ -92,6 +99,9 @@ class KeyStore {
         if (!isset($data['onetime_pool']) || !is_array($data['onetime_pool'])) {
             $data['onetime_pool'] = [];
         }
+        if (!isset($data['service']) || !is_array($data['service'])) {
+            $data['service'] = null;
+        }
         return $data;
     }
 
@@ -137,9 +147,9 @@ class KeyStore {
      * 验证原始 Key 是否与存储的哈希匹配
      *
      * @param string $rawKey  请求中传入的 Key
-     * @return string|false   'resident' 或 'onetime'，无效返回 false
+     * @return string|false   'resident' / 'onetime' / 'service'，无效返回 false
      */
-// @关键_$7：verify — 验证 API Key（支持常驻 Key 和一次性 Key，恒定时间比较防时序攻击）
+// @关键_$7：verify — 验证 API Key（支持常驻 / 一次性 / 服务 Key，恒定时间比较防时序攻击）
     public function verify($rawKey) {
         if (empty($rawKey)) return false;
         if (!file_exists($this->path)) return false;
@@ -166,7 +176,7 @@ class KeyStore {
             // ── 检查常驻 Key ──────────────────────────
             if (isset($keys['resident']) && is_array($keys['resident'])) {
                 $slot = $keys['resident'];
-                if (isset($slot['key_hash']) && hash_equals($slot['key_hash'], $hash)) {
+                if (isset($slot['key_hash']) && is_string($slot['key_hash']) && hash_equals($slot['key_hash'], $hash)) {
                     $expiresTs = strtotime($slot['expires']);
                     if ($expiresTs !== false && $expiresTs > $now) {
                         return 'resident';
@@ -178,9 +188,17 @@ class KeyStore {
                 }
             }
 
+            // ── 检查服务 Key（永不过期，不限次数，不销毁）─────────
+            if (isset($keys['service']) && is_array($keys['service'])) {
+                $slot = $keys['service'];
+                if (isset($slot['key_hash']) && is_string($slot['key_hash']) && hash_equals($slot['key_hash'], $hash)) {
+                    return 'service';
+                }
+            }
+
             // ── 检查一次性 Key 池 ────────────────────
             foreach ($keys['onetime_pool'] as $i => $slot) {
-                if (isset($slot['key_hash']) && hash_equals($slot['key_hash'], $hash)) {
+                if (isset($slot['key_hash']) && is_string($slot['key_hash']) && hash_equals($slot['key_hash'], $hash)) {
                     // 命中 — 从池中移除（不自动补充，因自动生成的 Key 明文无法被获取）
                     // 池补充应通过 CLI 工具 (su-keygen fill) 手动执行
                     array_splice($keys['onetime_pool'], $i, 1);
@@ -191,6 +209,9 @@ class KeyStore {
 
             return false;
 
+        } catch (\RuntimeException $e) {
+            error_log("[key_verify] 写入失败，Key 未消费: " . $e->getMessage());
+            return false;
         } finally {
             flock($fp, LOCK_UN);
             fclose($fp);
@@ -232,6 +253,9 @@ class KeyStore {
             }
             if (!isset($data['onetime_pool']) || !is_array($data['onetime_pool'])) {
                 $data['onetime_pool'] = [];
+            }
+            if (!isset($data['service']) || !is_array($data['service'])) {
+                $data['service'] = null;
             }
             // 执行业务逻辑，回调修改 $data 后由 writeLockedFile 写入
             $result = $callback($data, $fp);
@@ -308,6 +332,35 @@ class KeyStore {
         });
     }
 
+    /**
+     * 生成新的服务密钥（永不过期，不限次数）
+     *
+     * @param string $label  人类可读标签，标识密钥用途
+     * @return string  明文密钥（仅此一次显示）
+     */
+    public function generateService($label = 'default') {
+        return $this->withLock(function(&$data, $fp) use ($label) {
+            if (isset($data['service']) && is_array($data['service'])) {
+                throw new \RuntimeException("服务密钥已存在，请先使用 -drop -svc 撤销旧密钥");
+            }
+
+            $raw = $this->generateRawKey();
+            $hash = auth_hash($raw);
+            $prefix = substr($raw, 0, 8);
+            $created = formatIso8601(time(), $this->tz_offset);
+
+            $data['service'] = [
+                'key_hash'   => $hash,
+                'key_prefix' => $prefix,
+                'created'    => $created,
+                'label'      => $label,
+            ];
+            $this->writeLockedFile($fp, $data);
+
+            return $raw;
+        });
+    }
+
     // ── 吊销 ─────────────────────────────────────────
 
 // @关键_$11：revoke — 吊销指定类型的 Key（常驻/一次性/全部）
@@ -316,10 +369,13 @@ class KeyStore {
             if ($type === 'all') {
                 $data['resident'] = null;
                 $data['onetime_pool'] = [];
+                $data['service'] = null;
             } elseif ($type === 'resident') {
                 $data['resident'] = null;
             } elseif ($type === 'onetime') {
                 $data['onetime_pool'] = [];
+            } elseif ($type === 'service') {
+                $data['service'] = null;
             } else {
                 throw new \InvalidArgumentException("无效的吊销类型: {$type}");
             }
@@ -341,6 +397,7 @@ class KeyStore {
             'onetime_count' => 0,
             'onetime_pool_size' => $this->poolSize,
             'onetime_pool' => [],
+            'service' => null,
         ];
 
         if (isset($keys['resident']) && is_array($keys['resident'])) {
@@ -349,6 +406,15 @@ class KeyStore {
                 'prefix'  => $slot['key_prefix'] ?? '-',
                 'created' => $slot['created'] ?? '-',
                 'expires' => $slot['expires'] ?? '-',
+            ];
+        }
+
+        if (isset($keys['service']) && is_array($keys['service'])) {
+            $slot = $keys['service'];
+            $result['service'] = [
+                'prefix'  => $slot['key_prefix'] ?? '-',
+                'created' => $slot['created'] ?? '-',
+                'label'   => $slot['label'] ?? '-',
             ];
         }
 

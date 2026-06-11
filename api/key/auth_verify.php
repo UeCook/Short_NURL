@@ -7,8 +7,8 @@
  * 返回 $authCtx 结构：
  *   [
  *     'valid'  => bool,
- *     'type'   => string|null,   // 'resident' / 'onetime' / null（验证失败时）
- *     'reason' => string|null    // 'missing' / 'invalid' / null（验证成功时）
+ *     'type'   => string|null,   // 'resident' / 'onetime' / 'service' / null（验证失败时）
+ *     'reason' => string|null    // 'missing' / 'invalid' / 'wrong_channel' / null（验证成功时）
  *   ]
  *
  * 依赖：keys.php（通过 getKeyStore() 调 KeyStore::verify()）
@@ -18,8 +18,7 @@
  */
 
 // @关键_$32：auth_verify — 验证凭证原文，返回标准 $authCtx（valid/type/reason），不含错误输出
-function auth_verify(string $rawKey): array {
-    // 凭证为空
+function auth_verify(string $rawKey, string $mode = 'api'): array {
     if ($rawKey === '') {
         return [
             'valid'  => false,
@@ -28,18 +27,23 @@ function auth_verify(string $rawKey): array {
         ];
     }
 
-    // @外调用_&7：getKeyStore()->verify — 公共验证函数调用 KeyStore 验证
     $keyType = getKeyStore()->verify($rawKey);
 
     if ($keyType !== false) {
+        if ($keyType === 'service' && $mode !== 'headless') {
+            return [
+                'valid'  => false,
+                'type'   => null,
+                'reason' => 'wrong_channel',
+            ];
+        }
         return [
             'valid'  => true,
-            'type'   => $keyType,    // 'resident' 或 'onetime'
+            'type'   => $keyType,
             'reason' => null,
         ];
     }
 
-    // 验证失败
     return [
         'valid'  => false,
         'type'   => null,

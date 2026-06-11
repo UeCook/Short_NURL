@@ -112,7 +112,10 @@ function M.handle()
     end
     if forcible then
         -- 发生了强制驱逐，说明 shared dict 空间紧张，记录告警
-        ngx.log(ngx.WARN, "ShortURL: su_url:set forcible eviction for code=", code)
+        -- 同时设置标记，让 expire_sweep 在下一轮回收时修正计数漂移
+        ngx.log(ngx.ERR, "ShortURL: su_url:set forcible eviction for code=", code,
+                " — shared dict 可能空间不足，计数可能漂移，等待 sweep 修正")
+        su_meta:set("eviction_flag", 1)
     end
 
     local ok2, err2 = su_exp:set(code, exp_str, 0)
