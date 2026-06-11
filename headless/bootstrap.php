@@ -34,7 +34,7 @@ require_once __DIR__ . '/../api/lua/internal.php';
  * @param string $message     人类可读的中文错误描述
  * @param int    $httpStatus  HTTP 状态码
  */
-// @关键_$24：hl_error — 无头链路统一错误输出（{error:code, message:中文} 格式）
+// @关键_$22：hl_error — 无头链路统一错误输出（{error:code, message:中文} 格式）
 function hl_error($code, $message, $httpStatus) {
     http_response_code($httpStatus);
     echo json_encode(['error' => $code, 'message' => $message], JSON_UNESCAPED_UNICODE);

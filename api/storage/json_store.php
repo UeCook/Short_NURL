@@ -41,7 +41,7 @@ class JsonStore {
      *
      * @return array  code => entry 关联数组
      */
-// @关键_$13：read — 无锁读取 JSON 文件，返回 d 数据对象（rename 保证原子性）
+// @关键_$11：read — 无锁读取 JSON 文件，返回 d 数据对象（rename 保证原子性）
     public function read() {
         if (!file_exists($this->path)) {
             return [];
@@ -67,7 +67,7 @@ class JsonStore {
      * @param array $data  code => entry 关联数组
      * @throws \RuntimeException  备份失败、写入失败、验证失败
      */
-// @关键_$14：write — 安全写入 JSON 文件（备份 + .php.tmp + rename + 验证 + 回滚）
+// @关键_$12：write — 安全写入 JSON 文件（备份 + .php.tmp + rename + 验证 + 回滚）
     public function write(array $data) {
         $envelope = [
             'v'  => 1,
@@ -115,7 +115,7 @@ class JsonStore {
      * @param string $code
      * @return array|null
      */
-// @关键_$15：find — 按短码查找条目（大小写不敏感）
+// @关键_$13：find — 按短码查找条目（大小写不敏感）
     public function find($code) {
         $code = strtolower($code);
         $data = $this->read();
@@ -126,7 +126,7 @@ class JsonStore {
      * 统计总条目数
      * @return int
      */
-// @关键_$16：count — 统计总条目数
+// @关键_$14：count — 统计总条目数
     public function count() {
         return count($this->read());
     }
@@ -136,7 +136,7 @@ class JsonStore {
      * 通过 strtotime() 做 Unix 时间戳比较，时区安全
      * @return int
      */
-// @关键_$17：countActive — 统计有效（未过期）条目数
+// @关键_$15：countActive — 统计有效（未过期）条目数
     public function countActive() {
         $count = 0;
         foreach ($this->read() as $code => $item) {
@@ -163,7 +163,7 @@ class JsonStore {
      *       $store->lockEnd();
      *   }
      */
-// @关键_$18：lockBegin — 获取排他文件锁，用于原子读-检查-写操作
+// @关键_$16：lockBegin — 获取排他文件锁，用于原子读-检查-写操作
     public function lockBegin() {
         // 确保目录存在（防止运行时目录被意外删除导致 fopen 失败）
         $dir = dirname($this->path);
@@ -182,7 +182,7 @@ class JsonStore {
      * 从已锁定的文件指针读取，确保一致性
      * @return array  code => entry 关联数组
      */
-// @关键_$19：readLocked — 在持有排他锁状态下读取数据
+// @关键_$17：readLocked — 在持有排他锁状态下读取数据
     public function readLocked() {
         if (!$this->lockFp) {
             throw new \RuntimeException("未持有锁，请先调用 lockBegin()");
@@ -211,7 +211,7 @@ class JsonStore {
      * @param array $data  code => entry 关联数组
      * @throws \RuntimeException  备份失败、验证失败且回滚失败
      */
-// @关键_$20：writeLocked — 在持有排他锁状态下安全写入数据（备份 + 写入 + 验证 + 回滚）
+// @关键_$18：writeLocked — 在持有排他锁状态下安全写入数据（备份 + 写入 + 验证 + 回滚）
     public function writeLocked(array $data) {
         if (!$this->lockFp) {
             throw new \RuntimeException("未持有锁，请先调用 lockBegin()");
@@ -261,7 +261,7 @@ class JsonStore {
     /**
      * 释放排他文件锁
      */
-// @关键_$21：lockEnd — 释放排他文件锁
+// @关键_$19：lockEnd — 释放排他文件锁
     public function lockEnd() {
         if ($this->lockFp) {
             flock($this->lockFp, LOCK_UN);

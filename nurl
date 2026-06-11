@@ -160,6 +160,7 @@ function doNew(KeyStore $ks, array $cfg, bool $longOnly, bool $fullOnly): void
     echo "正在生成 API 密钥...\n\n";
 
     if (!$fullOnly) {
+        // @外调用_&18：generateResident — nurl -new 生成常驻密钥
         $residentKey = $ks->generateResident();
         echo "━━━ 常驻密钥 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
         echo "  $residentKey\n";
@@ -168,6 +169,7 @@ function doNew(KeyStore $ks, array $cfg, bool $longOnly, bool $fullOnly): void
     }
 
     if (!$longOnly) {
+        // @外调用_&19：fillPool — nurl -new 补充一次性密钥池
         $newKeys = $ks->fillPool();
         if (count($newKeys) > 0) {
             echo "━━━ 一次性密钥（新增 " . count($newKeys) . " 个）━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
@@ -188,6 +190,7 @@ function doNew(KeyStore $ks, array $cfg, bool $longOnly, bool $fullOnly): void
 
 function doLook(KeyStore $ks, array $cfg): void
 {
+    // @外调用_&20：status — nurl -look 查看密钥状态
     $status = $ks->status();
     echo "API 密钥状态\n";
     echo str_repeat('─', 60) . "\n\n";
@@ -242,6 +245,7 @@ function doSvc(KeyStore $ks, array $cfg): void
     echo "正在生成服务密钥" . ($label !== 'default' ? "（标签：{$label}）" : '') . "...\n\n";
 
     try {
+        // @外调用_&21：generateService — nurl -svc 生成服务密钥
         $serviceKey = $ks->generateService($label);
         echo "━━━ 服务密钥 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
         echo "  $serviceKey\n";
@@ -259,6 +263,7 @@ function doSvc(KeyStore $ks, array $cfg): void
 
 function doDrop(KeyStore $ks, string $target): void
 {
+    // @外调用_&22：revoke — nurl -drop 撤销密钥
     $ks->revoke($target);
     echo "已撤销：$target\n";
 
@@ -281,6 +286,7 @@ function doSweep(array $cfg): void
     try {
         $data = $tempStore->readLocked();
         $before = count($data);
+        // @外调用_&23：cleanExpiredEntries — nurl -sweep 清理过期条目
         cleanExpiredEntries($data);
         $after = count($data);
         if ($before === $after) {

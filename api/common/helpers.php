@@ -40,7 +40,7 @@ function isExpired($expStr) {
     return $ts < time();
 }
 
-// @关键_$26：checkDataAccess — 检查 data 目录下三个文件的可读写性，不可访问返回 false
+// @关键_$23：checkDataAccess — 检查 data 目录下三个文件的可读写性，不可访问返回 false
 function checkDataAccess($cfg) {
     $files = [
         $cfg['perm_path']  ?? '',
@@ -61,7 +61,7 @@ function checkDataAccess($cfg) {
  * @param string $path  文件路径
  * @return bool  可访问返回 true
  */
-// @关键_$27：checkFileAccess — 检查单个文件的可访问性（文件存在检查可读写，不存在检查目录可写）
+// @关键_$24：checkFileAccess — 检查单个文件的可访问性（文件存在检查可读写，不存在检查目录可写）
 function checkFileAccess($path) {
     if ($path === '' || $path === null) return false;
     if (file_exists($path)) {
@@ -95,7 +95,7 @@ function cleanExpiredEntries(&$data) {
  * 提取自 api/common/bootstrap.php 和 headless/bootstrap.php，
  * 避免两处维护完全相同的函数定义。
  */
-// @关键_$23/$25：getKeyStore — 获取全局 KeyStore 单例（延迟初始化，4 参数：path/tz/ttl/pool）
+// @关键_$21/$24：getKeyStore — 获取全局 KeyStore 单例（延迟初始化，4 参数：path/tz/ttl/pool）
 if (!function_exists('getKeyStore')) {
     function getKeyStore() {
         global $cfg;

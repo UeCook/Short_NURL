@@ -8,7 +8,7 @@
  * 换哈希算法时：只改这一个文件。
  */
 
-// @关键_$30：auth_hash — 认证哈希函数（SHA-256），换算法只改此文件，零依赖
+// @关键_$27：auth_hash — 认证哈希函数（SHA-256），换算法只改此文件，零依赖
 function auth_hash(string $raw): string {
     return hash('sha256', $raw);
 }

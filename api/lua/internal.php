@@ -12,6 +12,7 @@ $_lastInternalError = null;
  * 获取最近一次内部请求的错误信息
  * @return array|null  ['type'=>'curl'|'http'|'json', 'message'=>string, 'http_code'=>int]
  */
+// @关键_$34：getLastInternalError — 获取最近一次内部通信的 cURL 错误信息
 function getLastInternalError() {
     global $_lastInternalError;
     return $_lastInternalError;
@@ -117,7 +118,7 @@ function internalStat($cfg) {
  * @param array  $params  POST 请求体数据
  * @return array|null
  */
-// @关键_$22：internalPost — 内部 POST 请求辅助函数（cURL 与 OpenResty 通信）
+// @关键_$20：internalPost — 内部 POST 请求辅助函数（cURL 与 OpenResty 通信）
 function internalPost($cfg, $path, $params = []) {
     global $_lastInternalError;
     $_lastInternalError = null;

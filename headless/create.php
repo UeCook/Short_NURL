@@ -36,7 +36,7 @@ $code = isset($input['code']) ? trim($input['code']) : '';
 $isCustom = !empty($code);
 
 // ── 永久链去重（写入前查冷存储，URL 完全匹配则复用）──
-// @关键_$29：永久链去重 — ttl==0 且未传自定义短码时遍历 perm.json，URL 严格匹配则返回已有短码
+// @关键_$26：永久链去重 — ttl==0 且未传自定义短码时遍历 perm.json，URL 严格匹配则返回已有短码
 // 传了自定义短码说明用户有明确意图，去重不干预
 // 去重命中也返回固定响应结构（dedup=true），HTTP 统一为 200
 // 调用 internalSet 确保热存储同步（防止冷启动后热存储缺失该条目）
@@ -44,6 +44,7 @@ if (!$isTemp && !$isCustom) {
     $permData = $permStore->read();
     foreach ($permData as $dedupCode => $existing) {
         if (isset($existing['url'], $existing['lurl']) && $existing['url'] === $url) {
+            // @外调用_&17：internalSet — 无头创建去重路径写入热存储
             $dedupSynced = internalSet($cfg, $dedupCode, $existing['url'], 0, '0');
             $dedupWarning = null;
             if (!$dedupSynced) {

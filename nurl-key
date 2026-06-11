@@ -229,6 +229,7 @@ function handleErrorResponse(array $resp): void
 
 function doList(string $domain, string $key, bool $insecure = false): void
 {
+    // @外调用_&24：headlessGet — nurl-key -list 查询短链列表
     $resp = headlessGet($domain, $key, '/list', $insecure);
     handleErrorResponse($resp);
 
@@ -267,6 +268,7 @@ function doList(string $domain, string $key, bool $insecure = false): void
 
 function doStat(string $domain, string $key, bool $insecure = false): void
 {
+    // @外调用_&25：headlessGet — nurl-key -stat 查询配额状态
     $resp = headlessGet($domain, $key, '/stat', $insecure);
     handleErrorResponse($resp);
 
@@ -279,6 +281,7 @@ function doStat(string $domain, string $key, bool $insecure = false): void
 
 function doGet(string $domain, string $key, string $code, bool $insecure = false): void
 {
+    // @外调用_&26：headlessGet — nurl-key -get 查询单条短链
     $resp = headlessGet($domain, $key, '/get/' . $code, $insecure);
     handleErrorResponse($resp);
 
@@ -318,6 +321,7 @@ function doAdd(string $domain, string $key, ?string $url, ?string $ttl, ?string 
     }
 
     echo "正在创建短链...\n";
+    // @外调用_&27：headlessPost — nurl-key -add 创建短链
     $resp = headlessPost($domain, $key, '/create', $payload, $insecure);
     handleErrorResponse($resp);
 
@@ -348,6 +352,7 @@ function doAdd(string $domain, string $key, ?string $url, ?string $ttl, ?string 
 function doRm(string $domain, string $key, string $code, bool $insecure = false): void
 {
     echo "正在删除短链 {$code}...\n";
+    // @外调用_&28：headlessPost — nurl-key -rm 删除短链
     $resp = headlessPost($domain, $key, '/delete', ['code' => $code], $insecure);
     handleErrorResponse($resp);
 

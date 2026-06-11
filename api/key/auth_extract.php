@@ -17,7 +17,7 @@
  * 换凭证来源时（如改 Cookie、Basic Auth、Bearer Token）：只改这一个文件。
  */
 
-// @关键_$31：auth_extract — 从 HTTP 请求提取认证凭证（按 mode 隔离链路来源），不做验证，返回 string|null
+// @关键_$28：auth_extract — 从 HTTP 请求提取认证凭证（按 mode 隔离链路来源），不做验证，返回 string|null
 function auth_extract(?string $rawInput = null, string $mode = 'api'): ?string {
     if ($mode === 'headless') {
         // 无头链路：仅接受 X-Headless-Token

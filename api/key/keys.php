@@ -71,7 +71,7 @@ class KeyStore {
      *
      * @return string  完整明文密钥（su_ + base58 编码）
      */
-// @关键_$35：generateRawKey — 生成原始密钥（32 字节随机数 → Base58 编码 → su_ 前缀）
+// @关键_$32：generateRawKey — 生成原始密钥（32 字节随机数 → Base58 编码 → su_ 前缀）
     private function generateRawKey() {
         $bytes = random_bytes(32);
         // @外调用_&15：base58_encode — Base58 编码（generateRawKey 内，将 32 字节随机数编码为 Base58）
@@ -81,7 +81,7 @@ class KeyStore {
 
     // ── 文件读写 ───────────────────────────────────────
 
-// @关键_$4：readFile — 读取 keys.json 文件，返回常驻 Key 和一次性 Key 池数据
+// @关键_$4：readFile — 读取 keys.json 文件，返回常驻 Key、服务 Key 和一次性 Key 池数据
     private function readFile() {
         if (!file_exists($this->path)) {
             return ['resident' => null, 'onetime_pool' => []];
@@ -105,7 +105,7 @@ class KeyStore {
         return $data;
     }
 
-// @关键_$6：writeLockedFile — 在持有文件锁状态下安全写入 keys 数据（备份 + 写入 + 验证 + 回滚）
+// @关键_$5：writeLockedFile — 在持有文件锁状态下安全写入 keys 数据（备份 + 写入 + 验证 + 回滚）
     private function writeLockedFile($fp, array $data) {
         $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         $bak = $this->path . '.bak';
@@ -149,7 +149,7 @@ class KeyStore {
      * @param string $rawKey  请求中传入的 Key
      * @return string|false   'resident' / 'onetime' / 'service'，无效返回 false
      */
-// @关键_$7：verify — 验证 API Key（支持常驻 / 一次性 / 服务 Key，恒定时间比较防时序攻击）
+// @关键_$6：verify — 验证 API Key（支持常驻 / 一次性 / 服务 Key，恒定时间比较防时序攻击）
     public function verify($rawKey) {
         if (empty($rawKey)) return false;
         if (!file_exists($this->path)) return false;
@@ -229,7 +229,7 @@ class KeyStore {
      * @return mixed  回调的返回值
      * @throws \RuntimeException
      */
-// @关键_$28：withLock — 在 flock 排他锁内执行回调（保证 CLI 与 API 操作互斥，统一 inode）
+// @关键_$25：withLock — 在 flock 排他锁内执行回调（保证 CLI 与 API 操作互斥，统一 inode）
     private function withLock($callback) {
         $dir = dirname($this->path);
         if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
@@ -272,7 +272,7 @@ class KeyStore {
      * 生成新的常驻 Key
      * @return string  明文 Key（仅此一次显示）
      */
-// @关键_$9：generateResident — 生成新的常驻 Key（返回明文，仅此一次显示）
+// @关键_$7：generateResident — 生成新的常驻 Key（返回明文，仅此一次显示）
     public function generateResident() {
         return $this->withLock(function(&$data, $fp) {
             // @外调用_&16：generateRawKey — 密钥生成（generateResident 内，Base58 编码）
@@ -301,7 +301,7 @@ class KeyStore {
      * 将一次性 Key 池补充到最大容量
      * @return array  新生成的明文 Key 数组（仅此一次显示）
      */
-// @关键_$10：fillPool — 将一次性 Key 池补充到最大容量
+// @关键_$8：fillPool — 将一次性 Key 池补充到最大容量
     public function fillPool() {
         return $this->withLock(function(&$data, $fp) {
             $pool = $data['onetime_pool'];
@@ -338,13 +338,16 @@ class KeyStore {
      * @param string $label  人类可读标签，标识密钥用途
      * @return string  明文密钥（仅此一次显示）
      */
+// @关键_$33：generateService — 生成服务密钥（永不过期、不限使用次数，仅限无头模式）
     public function generateService($label = 'default') {
         return $this->withLock(function(&$data, $fp) use ($label) {
             if (isset($data['service']) && is_array($data['service'])) {
                 throw new \RuntimeException("服务密钥已存在，请先使用 -drop -svc 撤销旧密钥");
             }
 
+            // @外调用_&16：generateRawKey — 密钥生成（generateService 内）
             $raw = $this->generateRawKey();
+            // @外调用_&8：auth_hash — 哈希运算（generateService 内，换算法改 auth_hash.php）
             $hash = auth_hash($raw);
             $prefix = substr($raw, 0, 8);
             $created = formatIso8601(time(), $this->tz_offset);
@@ -363,7 +366,7 @@ class KeyStore {
 
     // ── 吊销 ─────────────────────────────────────────
 
-// @关键_$11：revoke — 吊销指定类型的 Key（常驻/一次性/全部）
+// @关键_$9：revoke — 吊销指定类型的 Key（常驻/一次性/服务/全部）
     public function revoke($type = 'all') {
         $this->withLock(function(&$data, $fp) use ($type) {
             if ($type === 'all') {
@@ -389,7 +392,7 @@ class KeyStore {
      * 获取当前 Key 状态，供 CLI 显示
      * @return array
      */
-// @关键_$12：status — 获取当前 Key 状态（供 CLI 工具显示）
+// @关键_$10：status — 获取当前 Key 状态（供 CLI 工具显示）
     public function status() {
         $keys = $this->readFile();
         $result = [

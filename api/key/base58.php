@@ -131,7 +131,7 @@ if (!function_exists('bcmul')) {
  * @param string $bytes  原始二进制数据
  * @return string        Base58 编码字符串
  */
-// @关键_$33：base58_encode — Base58 编码函数（Bitcoin 标准字母表，bcmath 大整数运算）
+// @关键_$30：base58_encode — Base58 编码函数（Bitcoin 标准字母表，bcmath 大整数运算）
 function base58_encode(string $bytes): string {
     if ($bytes === '') return '';
 
@@ -178,7 +178,7 @@ function base58_encode(string $bytes): string {
  * @param string $base58  Base58 编码字符串
  * @return string         原始二进制数据
  */
-// @关键_$34：base58_decode — Base58 解码函数（Bitcoin 标准字母表，bcmath 大整数运算）
+// @关键_$31：base58_decode — Base58 解码函数（Bitcoin 标准字母表，bcmath 大整数运算）
 function base58_decode(string $base58): string {
     if ($base58 === '') return '';
 

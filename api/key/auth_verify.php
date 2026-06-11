@@ -17,7 +17,7 @@
  * 换验证方式时（如从 key 改成账号密码体系）：改这个文件 + keys.php。
  */
 
-// @关键_$32：auth_verify — 验证凭证原文，返回标准 $authCtx（valid/type/reason），不含错误输出
+// @关键_$29：auth_verify — 验证凭证原文，返回标准 $authCtx（valid/type/reason），不含错误输出
 function auth_verify(string $rawKey, string $mode = 'api'): array {
     if ($rawKey === '') {
         return [
