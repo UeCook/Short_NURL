@@ -170,11 +170,25 @@ function doNew(KeyStore $ks, array $cfg, bool $longOnly, bool $fullOnly): void
 
     if (!$longOnly) {
         // @外调用_&19：fillPool — nurl -new 补充一次性密钥池
+        $beforeStatus = $ks->status();
+        $consumedPrefixes = [];
+        foreach ($beforeStatus['onetime_pool'] as $o) {
+            if (!empty($o['consumed'])) {
+                $consumedPrefixes[] = $o['prefix'];
+            }
+        }
+        $consumedCount = count($consumedPrefixes);
         $newKeys = $ks->fillPool();
         if (count($newKeys) > 0) {
-            echo "━━━ 一次性密钥（新增 " . count($newKeys) . " 个）━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+            if ($consumedCount > 0) {
+                echo "━━━ 一次性密钥（新增 " . count($newKeys) . " 个，失效 {$consumedCount} 个）━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+                echo "  已失效：" . implode('  ', $consumedPrefixes) . "\n";
+            } else {
+                echo "━━━ 一次性密钥（新增 " . count($newKeys) . " 个）━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+            }
             foreach ($newKeys as $i => $key) {
-                echo "  " . ($i + 1) . ". $key\n";
+                $prefix = substr($key, 0, 8);
+                echo "  " . ($i + 1) . ". [{$prefix}] {$key}\n";
             }
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
             echo "请立即保存所有密钥，之后将不再显示。\n";
@@ -223,7 +237,8 @@ function doLook(KeyStore $ks, array $cfg): void
     echo "  一次性密钥池：{$count}/{$max} 个密钥\n";
     if (count($status['onetime_pool']) > 0) {
         foreach ($status['onetime_pool'] as $i => $o) {
-            echo "    " . ($i + 1) . ". {$o['prefix']}  （创建时间：{$o['created']}）\n";
+            $marker = !empty($o['consumed']) ? '  （已失效）' : '';
+            echo "    " . ($i + 1) . ". {$o['prefix']}  （创建时间：{$o['created']}）{$marker}\n";
         }
     } else {
         echo "    （空）\n";

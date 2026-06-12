@@ -10,6 +10,13 @@ require __DIR__ . '/../common/bootstrap.php';
 
 // 认证已由 bootstrap.php 统一处理，$AUTH['valid'] === true 保证到达此处
 
+// ── 一次性密钥禁止进行短链管理 ─────────────────────────
+if (($AUTH['type'] ?? null) === 'onetime') {
+    http_response_code(403);
+    echo json_encode(['error' => '一次性密钥无权进行短链管理'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 $permStore = new JsonStore($cfg['perm_path'], $cfg['tz_offset']);
 $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
 

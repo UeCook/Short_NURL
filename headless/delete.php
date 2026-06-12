@@ -9,6 +9,11 @@
 // @外接口_#6：POST /headless/api/delete — 删除短链（无头链路入口）
 require __DIR__ . '/bootstrap.php';
 
+// ── 一次性密钥禁止进行短链管理 ─────────────────────────
+if (($AUTH['type'] ?? null) === 'onetime') {
+    hl_error('onetime_forbidden', '一次性密钥无权进行短链管理', 403);
+}
+
 // ── 解析输入 ─────────────────────────────────────────
 // $RAW_INPUT 由 bootstrap.php 缓存（php://input 只能读一次）
 $input = json_decode($GLOBALS['RAW_INPUT'] ?? '{}', true);

@@ -430,9 +430,33 @@
 
   function refreshManageData() {
     var key = getManageKey();
-    loadStat(key);
-    loadList(key);
     manageListLoaded = false;
+    if (!key) { renderStat(null); renderList(null, null); return; }
+
+    var errorShown = false;
+
+    apiGet("/stat", key)
+      .then(function (data) { renderStat(data); })
+      .catch(function (err) {
+        if (!errorShown) {
+          errorShown = true;
+          showToast(err.message || "获取配额失败", "error");
+        }
+        renderStat(null);
+      });
+
+    apiGet("/list", key)
+      .then(function (data) {
+        renderList(data.permanent || [], data.temporary || []);
+        manageListLoaded = true;
+      })
+      .catch(function (err) {
+        if (!errorShown) {
+          errorShown = true;
+          showToast(err.message || "获取列表失败", "error");
+        }
+        renderList(null, null);
+      });
   }
 
   /* ── 列表操作事件委托 ─────────────────────────────────── */

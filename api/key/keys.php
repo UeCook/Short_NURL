@@ -199,9 +199,7 @@ class KeyStore {
             // ── 检查一次性 Key 池 ────────────────────
             foreach ($keys['onetime_pool'] as $i => $slot) {
                 if (isset($slot['key_hash']) && is_string($slot['key_hash']) && hash_equals($slot['key_hash'], $hash)) {
-                    // 命中 — 从池中移除（不自动补充，因自动生成的 Key 明文无法被获取）
-                    // 池补充应通过 CLI 工具 (su-keygen fill) 手动执行
-                    array_splice($keys['onetime_pool'], $i, 1);
+                    $keys['onetime_pool'][$i]['key_hash'] = null;
                     $this->writeLockedFile($fp, $keys);
                     return 'onetime';
                 }
@@ -304,18 +302,30 @@ class KeyStore {
 // @关键_$8：fillPool — 将一次性 Key 池补充到最大容量
     public function fillPool() {
         return $this->withLock(function(&$data, $fp) {
-            $pool = $data['onetime_pool'];
+            $pool = &$data['onetime_pool'];
             $newKeys = [];
 
-            while (count($pool) < $this->poolSize) {
-                // @外调用_&16：generateRawKey — 密钥生成（fillPool 内，Base58 编码）
-                $raw = $this->generateRawKey();
+            foreach ($pool as $i => $slot) {
+                if (empty($slot['key_hash'])) {
+                    $raw = $this->generateRawKey();
+                    $hash = auth_hash($raw);
+                    $prefix = substr($raw, 0, 8);
+                    $created = formatIso8601(time(), $this->tz_offset);
 
-                // @外调用_&8：auth_hash — 哈希运算（fillPool 内，换算法改 auth_hash.php）
+                    $pool[$i] = [
+                        'key_hash'   => $hash,
+                        'key_prefix' => $prefix,
+                        'created'    => $created,
+                    ];
+                    $newKeys[] = $raw;
+                }
+            }
+
+            while (count($pool) < $this->poolSize) {
+                $raw = $this->generateRawKey();
                 $hash = auth_hash($raw);
                 $prefix = substr($raw, 0, 8);
-                $now = time();
-                $created = formatIso8601($now, $this->tz_offset);
+                $created = formatIso8601(time(), $this->tz_offset);
 
                 $pool[] = [
                     'key_hash'   => $hash,
@@ -325,9 +335,7 @@ class KeyStore {
                 $newKeys[] = $raw;
             }
 
-            $data['onetime_pool'] = $pool;
             $this->writeLockedFile($fp, $data);
-
             return $newKeys;
         });
     }
@@ -421,11 +429,16 @@ class KeyStore {
             ];
         }
 
-        $result['onetime_count'] = count($keys['onetime_pool'] ?? []);
+        $result['onetime_count'] = 0;
         foreach ($keys['onetime_pool'] as $slot) {
+            $isConsumed = empty($slot['key_hash']);
+            if (!$isConsumed) {
+                $result['onetime_count']++;
+            }
             $result['onetime_pool'][] = [
-                'prefix'  => $slot['key_prefix'] ?? '-',
-                'created' => $slot['created'] ?? '-',
+                'prefix'   => $slot['key_prefix'] ?? '-',
+                'created'  => $slot['created'] ?? '-',
+                'consumed' => $isConsumed,
             ];
         }
 

@@ -8,6 +8,11 @@
 // @外接口_#7：GET /headless/api/list — 查询所有短链（无头链路入口）
 require __DIR__ . '/bootstrap.php';
 
+// ── 一次性密钥禁止进行短链管理 ─────────────────────────
+if (($AUTH['type'] ?? null) === 'onetime') {
+    hl_error('onetime_forbidden', '一次性密钥无权进行短链管理', 403);
+}
+
 $permStore = new JsonStore($cfg['perm_path'], $cfg['tz_offset']);
 $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
 
