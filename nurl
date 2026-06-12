@@ -11,11 +11,13 @@
  *   -full         仅补充一次性密钥池
  *   -svc          生成服务密钥（永不过期，用于服务间集成）
  *   -svc -label:X 指定服务密钥标签（默认 default）
+ *   -itk          生成/轮换内部通信令牌（LPA-Key）
  *   -look         显示密钥状态（不显示明文）
- *   -drop         撤销所有密钥
+ *   -drop         撤销所有密钥（含内部令牌）
  *   -drop -long   仅删除常驻密钥
  *   -drop -full   仅删除所有一次性密钥
  *   -drop -svc    仅删除服务密钥
+ *   -drop -itk    仅删除内部通信令牌
  *   -sweep        清理过期临时短链
  *   -v            查看版本
  *   -h / -help    显示帮助信息
@@ -64,6 +66,8 @@ $keyStore = new KeyStore(
     $cfg['onetime_pool_size']
 );
 
+$internalTokenPath = $cfg['internal_token_path'];
+
 // ── 解析参数 ─────────────────────────────────────────────
 $args = array_slice($argv, 1);
 
@@ -76,6 +80,7 @@ $hasNew  = in_array('-new', $args);
 $hasLong = in_array('-long', $args);
 $hasFull = in_array('-full', $args);
 $hasSvc  = in_array('-svc', $args);
+$hasItk  = in_array('-itk', $args);
 $hasLook = in_array('-look', $args);
 $hasDrop = in_array('-drop', $args);
 $hasSweep = in_array('-sweep', $args);
@@ -104,18 +109,31 @@ if ($hasDrop) {
         $hasLong ? 'resident' : null,
         $hasFull ? 'onetime' : null,
         $hasSvc  ? 'service' : null,
+        $hasItk  ? 'internal_token' : null,
     ]);
     if (count($dropTargets) > 1) {
-        fwrite(STDERR, "错误：-drop 一次只能指定一个目标（-long / -full / -svc）\n");
+        fwrite(STDERR, "错误：-drop 一次只能指定一个目标（-long / -full / -svc / -itk）\n");
         exit(1);
     }
     $target = $dropTargets ? reset($dropTargets) : 'all';
-    doDrop($keyStore, $target);
+    if ($target === 'internal_token') {
+        doDropItk($internalTokenPath);
+    } else {
+        doDrop($keyStore, $target);
+        if ($target === 'all') {
+            doDropItk($internalTokenPath, true);
+        }
+    }
     exit(0);
 }
 
 if ($hasSvc && !$hasDrop) {
     doSvc($keyStore, $cfg);
+    exit(0);
+}
+
+if ($hasItk && !$hasDrop) {
+    doItk($internalTokenPath);
     exit(0);
 }
 
@@ -125,19 +143,19 @@ if ($hasLook) {
 }
 
 if ($hasNew) {
-    doNew($keyStore, $cfg, $hasLong, $hasFull);
+    doNew($keyStore, $cfg, $hasLong, $hasFull, $internalTokenPath);
     exit(0);
 }
 
 if ($hasLong) {
-    // -long 单独使用 = 仅轮换常驻密钥
-    doNew($keyStore, $cfg, true, false);
+    requireNonEmptyVault($keyStore);
+    doNew($keyStore, $cfg, true, false, $internalTokenPath);
     exit(0);
 }
 
 if ($hasFull) {
-    // -full 单独使用 = 仅补充一次性密钥池
-    doNew($keyStore, $cfg, false, true);
+    requireNonEmptyVault($keyStore);
+    doNew($keyStore, $cfg, false, true, $internalTokenPath);
     exit(0);
 }
 
@@ -150,7 +168,7 @@ exit(1);
 // ── 命令实现 ──────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════
 
-function doNew(KeyStore $ks, array $cfg, bool $longOnly, bool $fullOnly): void
+function doNew(KeyStore $ks, array $cfg, bool $longOnly, bool $fullOnly, string $tokenPath): void
 {
     if ($longOnly && $fullOnly) {
         fwrite(STDERR, "错误：-long 和 -full 不能同时使用\n");
@@ -200,6 +218,19 @@ function doNew(KeyStore $ks, array $cfg, bool $longOnly, bool $fullOnly): void
     }
 
     echo "密钥已存储至：{$cfg['keys_path']}\n";
+
+    if (!$longOnly && !$fullOnly) {
+        $existing = @file_get_contents($tokenPath);
+        if ($existing === false || trim($existing) === '') {
+            $token = bin2hex(random_bytes(32));
+            writeTokenFile($tokenPath, $token);
+            echo "\n━━━ 内部通信令牌（LPA-Key）━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+            echo "  $token\n";
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+            echo "已写入：{$tokenPath}\n";
+            echo "此令牌用于 PHP↔Lua 内部通信认证，无需手动复制。\n\n";
+        }
+    }
 }
 
 function doLook(KeyStore $ks, array $cfg): void
@@ -242,6 +273,16 @@ function doLook(KeyStore $ks, array $cfg): void
         }
     } else {
         echo "    （空）\n";
+    }
+    echo "\n";
+
+    $tokenRaw = @file_get_contents($cfg['internal_token_path'] ?? '');
+    $token = $tokenRaw !== false ? trim($tokenRaw) : '';
+    echo "  内部通信令牌（LPA-Key）：";
+    if ($token === '') {
+        echo "（未设置）\n";
+    } else {
+        echo substr($token, 0, 8) . "...（已设置）\n";
     }
     echo "\n";
 }
@@ -293,6 +334,62 @@ function doDrop(KeyStore $ks, string $target): void
     }
 }
 
+function doItk(string $tokenPath): void
+{
+    echo "正在生成内部通信令牌（LPA-Key）...\n\n";
+    $token = bin2hex(random_bytes(32));
+    writeTokenFile($tokenPath, $token);
+    echo "━━━ 内部通信令牌（LPA-Key）━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+    echo "  $token\n";
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+    echo "已写入：{$tokenPath}\n";
+    echo "用于 PHP↔Lua 内部通信认证。\n";
+    echo "注意：轮换后需 reload nginx（如 nginx -s reload）令牌才在 Lua 侧生效，\n";
+    echo "      reload 前内部同步会返回 403（synced=false），属正常现象。\n\n";
+}
+
+function doDropItk(string $tokenPath, bool $silent = false): void
+{
+    writeTokenFile($tokenPath, '');
+    if (!$silent) {
+        echo "已清除内部通信令牌。\n";
+        echo "内部通信将跳过认证，直到重新生成（php nurl -itk 或 php nurl -new）。\n";
+        echo "注意：需 reload nginx 后 Lua 侧才会跳过校验。\n";
+    }
+}
+
+function writeTokenFile(string $path, string $content): void
+{
+    $dir = dirname($path);
+    if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
+        fwrite(STDERR, "错误：无法创建目录 {$dir}\n");
+        exit(1);
+    }
+    $tmp = $path . '.php.tmp';
+    if (@file_put_contents($tmp, $content, LOCK_EX) === false) {
+        fwrite(STDERR, "错误：写入临时文件失败 {$tmp}\n");
+        exit(1);
+    }
+    if (!@rename($tmp, $path)) {
+        @unlink($tmp);
+        fwrite(STDERR, "错误：rename 失败 {$tmp} → {$path}\n");
+        exit(1);
+    }
+    @chmod($path, 0666);
+}
+
+function requireNonEmptyVault(KeyStore $ks): void
+{
+    $status = $ks->status();
+    $hasResident = $status['resident'] !== null;
+    $hasService  = $status['service'] !== null;
+    $hasOnetime  = $status['onetime_count'] > 0;
+    if (!$hasResident && !$hasService && !$hasOnetime) {
+        fwrite(STDERR, "错误：无可用密钥，请先执行 php nurl -new 初始化。\n");
+        exit(1);
+    }
+}
+
 function doSweep(array $cfg): void
 {
     echo "正在清理过期临时短链...\n\n";
@@ -329,11 +426,13 @@ function showHelp(): void
     echo "  -full         仅补充一次性密钥池\n";
     echo "  -svc          生成服务密钥（永不过期，用于服务间集成）\n";
     echo "  -svc -label:X 指定服务密钥标签（默认 default）\n";
+    echo "  -itk          生成/轮换内部通信令牌（LPA-Key，PHP↔Lua 认证）\n";
     echo "  -look         显示密钥状态（不显示明文）\n";
-    echo "  -drop         撤销所有密钥\n";
+    echo "  -drop         撤销所有密钥（含内部令牌）\n";
     echo "  -drop -long   仅删除常驻密钥\n";
     echo "  -drop -full   仅删除所有一次性密钥\n";
     echo "  -drop -svc    仅删除服务密钥\n";
+    echo "  -drop -itk    仅删除内部通信令牌\n";
     echo "数据维护：\n";
     echo "  -sweep        清理过期临时短链\n\n";
     echo "其他：\n";

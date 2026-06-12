@@ -162,7 +162,10 @@ class KeyStore {
         $now = time();
 
         $fp = fopen($this->path, 'r+');
-        if (!$fp) return false;
+        if (!$fp) {
+            error_log("[key_verify] 无法打开文件（权限不足？）：{$this->path}");
+            return false;
+        }
         flock($fp, LOCK_EX);
         try {
             fseek($fp, 0);

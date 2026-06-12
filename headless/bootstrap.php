@@ -41,6 +41,22 @@ function hl_error($code, $message, $httpStatus) {
     exit;
 }
 
+// ── 检查数据文件可读写性（认证之前，先于密钥校验）──────────────
+$checkFiles = [
+    $cfg['perm_path']  ?? '',
+    $cfg['temp_path']  ?? '',
+    $cfg['keys_path']  ?? '',
+];
+$failedFiles = [];
+foreach ($checkFiles as $f) {
+    if (!checkFileAccess($f)) {
+        $failedFiles[] = basename($f);
+    }
+}
+if (!empty($failedFiles)) {
+    hl_error('data_inaccessible', '数据不可访问：' . implode('、', $failedFiles), 430);
+}
+
 // ── 认证解析（与 api 链路共享同一套公共函数）─────────
 // php://input 只能读一次，提前缓存
 // 显式写入 $GLOBALS 避免被函数内 require 时局部作用域导致 $GLOBALS['RAW_INPUT'] 为空
@@ -63,12 +79,6 @@ if (!$AUTH['valid']) {
     } else {
         hl_error('invalid_key', '密钥失效或不正确', 406);
     }
-}
-
-// ── 检查数据文件可读写性（认证通过后）──────────────
-// 支持文件不存在时检查目录可写性（允许首次部署时自动创建）
-if (!checkDataAccess($cfg)) {
-    hl_error('data_inaccessible', '数据不可访问', 430);
 }
 
 // getKeyStore() 已提取至 helpers.php，由 function_exists 守卫防止重复定义

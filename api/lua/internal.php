@@ -79,6 +79,7 @@ function internalStat($cfg) {
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => $timeout,
         CURLOPT_CONNECTTIMEOUT => $timeout,
+        CURLOPT_HTTPHEADER => !empty($cfg['internal_token']) ? ['LPA-Key: ' . $cfg['internal_token']] : [],
     ]);
     $resp = curl_exec($ch);
     $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -136,7 +137,10 @@ function internalPost($cfg, $path, $params = []) {
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => json_encode($params),
-        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_HTTPHEADER => array_merge(
+            ['Content-Type: application/json'],
+            !empty($cfg['internal_token']) ? ['LPA-Key: ' . $cfg['internal_token']] : []
+        ),
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => $timeout,
         CURLOPT_CONNECTTIMEOUT => $timeout,

@@ -42,4 +42,6 @@ return [
     //如果你的 PHP 是直接部署的，则无需改网桥IP，保持 127.0.0.1 即可
     'internal_host'    => 'http://127.0.0.1:18500',   //具体内网地址请自行查阅！
     'internal_timeout' => 2.0,                        //内部接口请求超时时间（秒）
+    'internal_token_path' => __DIR__ . '/../backend/data/internal_token',
+    'internal_token'      => trim(@file_get_contents(__DIR__ . '/../backend/data/internal_token') ?: ''),
 ];
