@@ -11,7 +11,7 @@
 
 ---
 
-文档地址（docs）：[https://uoca.top/Short_NURL](https://uoca.top/Short_NURL)
+文档地址（docs）：[https://blog.uoca.top/Short_NURL](https://blog.uoca.top/Short_NURL)
 
 演示地址（demo）：[https://r.uoca.top](https://r.uoca.top)
 
