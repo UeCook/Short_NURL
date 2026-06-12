@@ -47,9 +47,10 @@ function M.handle()
         return
     end
 
-    -- url：必须以 http:// 或 https:// 开头，限制长度
+    -- url：必须以 http:// 或 https:// 开头，限制长度，拒绝控制字符和空白
     if type(url) ~= "string" or #url > MAX_URL_LEN
-       or not url:match("^https?://") then
+       or not url:match("^https?://")
+       or url:find("[%c]") then
         ngx.status = 400
         ngx.header["Content-Type"] = "application/json"
         ngx.say('{"error":"invalid url"}')
@@ -74,6 +75,15 @@ function M.handle()
         ngx.status = 400
         ngx.header["Content-Type"] = "application/json"
         ngx.say('{"error":"invalid exp_str"}')
+        ngx.exit(400)
+        return
+    end
+
+    -- ttl/exp_str 一致性：永久链接 ttl==0 ⟺ exp_str=="0"
+    if (ttl == 0) ~= (exp_str == "0") then
+        ngx.status = 400
+        ngx.header["Content-Type"] = "application/json"
+        ngx.say('{"error":"ttl/exp_str mismatch"}')
         ngx.exit(400)
         return
     end

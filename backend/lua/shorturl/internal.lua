@@ -2,7 +2,6 @@
 -- Routes /internal/set, /internal/delete, /internal/stat to handlers
 -- Only accessible from allowed IPs (enforced by Nginx config)
 
-local cjson = require "cjson.safe"
 local M = {}
 
 function M.dispatch()

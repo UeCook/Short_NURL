@@ -24,20 +24,19 @@ function M.run(premature)
     local su_exp = ngx.shared.su_exp
     local su_meta = ngx.shared.su_meta
 
-    -- Acquire sweep lock with TTL protection
+    -- Acquire sweep lock atomically using add() (returns nil if key already exists)
     -- If the lock holder crashes, the TTL ensures automatic release after expire_interval seconds,
     -- preventing permanent deadlock. Without TTL, a worker panic would lock sweep until next restart.
-    local lock = su_meta:get("lock_sweep")
-    if tonumber(lock) == 1 then return end
-
-    local expire_interval = tonumber(ngx.var.su_expire_interval) or 3600
+    local expire_interval = tonumber(su_meta:get("expire_interval")) or 3600
     -- TTL = 2x interval: prevents the next scheduled sweep from being skipped due to
     -- lock TTL expiring at almost the same instant the next timer fires
-    su_meta:set("lock_sweep", 1, expire_interval * 2)
+    local lock_ttl = expire_interval * 2
+    local ok, err = su_meta:add("lock_sweep", 1, lock_ttl)
+    if not ok then return end
 
     local expired_deleted = 0
     local evicted_deleted = 0
-    local ok, err = pcall(function()
+    local pok, perr = pcall(function()
         local now_epoch = ngx.time()
 
         -- Iterate su_exp (TTL=0, always reliable) instead of su_url
@@ -74,8 +73,8 @@ function M.run(premature)
         end
     end)
 
-    if not ok then
-        ngx.log(ngx.ERR, "ShortURL: expire_sweep error: ", err)
+    if not pok then
+        ngx.log(ngx.ERR, "ShortURL: expire_sweep error: ", perr)
     end
 
     local total_temp_removed = expired_deleted + evicted_deleted

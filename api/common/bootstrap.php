@@ -41,25 +41,6 @@ require_once __DIR__ . '/../key/keys.php';
 require_once __DIR__ . '/../storage/json_store.php';
 require_once __DIR__ . '/../lua/internal.php';
 
-// ── 检查数据文件可读写性 ──────────────────────────────
-// data 目录（777）及内部文件（666）权限缺失时，提前返回 430
-// 避免被误判为 Key 无效（406）
-// 支持按需检查：接口文件可在 require bootstrap.php 之前设置 $checkFiles 数组
-$checkFiles = $checkFiles ?? [
-    $cfg['perm_path']  ?? '',
-    $cfg['temp_path']  ?? '',
-    $cfg['keys_path']  ?? '',
-];
-foreach ($checkFiles as $f) {
-    if (!checkFileAccess($f)) {
-        http_response_code(430);
-        echo json_encode(['error' => '数据不可访问'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
-}
-
-// getKeyStore() 已提取至 helpers.php，由 function_exists 守卫防止重复定义
-
 // ── 认证解析（公共化，所有 api 接口共享）──────────────
 // php://input 只能读一次，提前缓存供 auth_extract 和业务文件使用
 // 显式写入 $GLOBALS 避免被函数内 require 时局部作用域导致 $GLOBALS['RAW_INPUT'] 为空
@@ -86,4 +67,22 @@ if (!$AUTH['valid']) {
         echo json_encode(['error' => '密钥失效或不正确'], JSON_UNESCAPED_UNICODE);
     }
     exit;
+}
+
+// getKeyStore() 已提取至 helpers.php，由 function_exists 守卫防止重复定义
+
+// ── 检查数据文件可读写性（认证通过后）──────────────
+// data 目录（777）及内部文件（666）权限缺失时，返回 430
+// 支持按需检查：接口文件可在 require bootstrap.php 之前设置 $checkFiles 数组
+$checkFiles = $checkFiles ?? [
+    $cfg['perm_path']  ?? '',
+    $cfg['temp_path']  ?? '',
+    $cfg['keys_path']  ?? '',
+];
+foreach ($checkFiles as $f) {
+    if (!checkFileAccess($f)) {
+        http_response_code(430);
+        echo json_encode(['error' => '数据不可访问'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
 }

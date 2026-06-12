@@ -108,6 +108,7 @@ try {
         $generated = false;
         for ($i = 0; $i < 8; $i++) {
             $candidate = ''; for ($j = 0; $j < 4; $j++) $candidate .= $chars[random_int(0, $maxLen)];
+            if (in_array($candidate, $cfg['reserved_codes'])) continue;
             if (isset($data[$candidate])) continue;
             if ($otherStore->find($candidate)) continue;
             $code = $candidate; $generated = true; break;

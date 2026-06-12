@@ -203,15 +203,16 @@ class JsonStore {
 
     /**
      * 在持有排他锁的状态下安全写入数据（v2.1 safe_write 规范）
-     * 流程：备份 → 写入 → 验证 → 失败回滚
+     * 流程：备份 → tmp写入 → rename → 验证 → 失败回滚
      *
-     * 注意：此方法在文件锁内直接操作文件指针，不使用 tmp+rename（因为锁绑定在文件句柄上）
-     * 改为先保存备份到 .bak 文件，再原地写入，最后读回验证
+     * 使用 tmp+rename 而非原地 ftruncate+fwrite，确保无锁并发读取（read()）
+     * 始终看到完整文件（旧版或新版），不会读到截断后的空/半写状态。
+     * 排他锁仅保证同时只有一个写者，原子性由 rename 保证。
      *
      * @param array $data  code => entry 关联数组
      * @throws \RuntimeException  备份失败、验证失败且回滚失败
      */
-// @关键_$18：writeLocked — 在持有排他锁状态下安全写入数据（备份 + 写入 + 验证 + 回滚）
+// @关键_$18：writeLocked — 在持有排他锁状态下安全写入数据（备份 + tmp+rename + 验证 + 回滚）
     public function writeLocked(array $data) {
         if (!$this->lockFp) {
             throw new \RuntimeException("未持有锁，请先调用 lockBegin()");
@@ -224,8 +225,9 @@ class JsonStore {
         $json = json_encode($envelope, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
         $bak = $this->path . '.bak';
+        $tmp = $this->path . '.php.tmp';
 
-        // 1. 备份当前文件内容到 .bak
+        // 1. 备份当前文件内容到 .bak（从锁定的文件指针读取）
         fseek($this->lockFp, 0);
         $currentContent = stream_get_contents($this->lockFp);
         if ($currentContent !== false && strlen($currentContent) > 0) {
@@ -234,22 +236,38 @@ class JsonStore {
             }
         }
 
-        // 2. 原地写入（截断 + 写入 + 刷盘）
-        fseek($this->lockFp, 0);
-        ftruncate($this->lockFp, 0);
-        fwrite($this->lockFp, $json);
-        fflush($this->lockFp);
+        // 2. 写入 tmp 文件 + rename 原子替换（保证无锁 read() 读到完整文件）
+        if (@file_put_contents($tmp, $json, LOCK_EX) === false) {
+            @unlink($tmp);
+            throw new \RuntimeException("写入临时文件失败：$tmp");
+        }
+        if (!@rename($tmp, $this->path)) {
+            @unlink($tmp);
+            throw new \RuntimeException("rename 失败：$tmp → {$this->path}");
+        }
 
-        // 3. 验证写入完整性
+        // 3. 重新打开文件指针（rename 改变了 inode，旧 fp 不再指向目标文件）
+        //    新 fp 继承排他锁语义（旧 inode 的锁随 fclose 释放，但 rename 已完成，无竞态）
+        flock($this->lockFp, LOCK_UN);
+        fclose($this->lockFp);
+        $this->lockFp = fopen($this->path, 'r+');
+        if (!$this->lockFp) {
+            throw new \RuntimeException("写入后重新打开文件失败：{$this->path}");
+        }
+        flock($this->lockFp, LOCK_EX);
+
+        // 4. 验证写入完整性
         fseek($this->lockFp, 0);
         $verify = stream_get_contents($this->lockFp);
         if ($verify === false || json_decode($verify, true) === null) {
-            // 3b. 验证失败 → 从备份回滚
+            // 4b. 验证失败 → 从备份回滚（同样用 tmp+rename）
             if (file_exists($bak) && ($bakContent = @file_get_contents($bak)) !== false) {
-                fseek($this->lockFp, 0);
-                ftruncate($this->lockFp, 0);
-                fwrite($this->lockFp, $bakContent);
-                fflush($this->lockFp);
+                @file_put_contents($tmp, $bakContent, LOCK_EX);
+                @rename($tmp, $this->path);
+                flock($this->lockFp, LOCK_UN);
+                fclose($this->lockFp);
+                $this->lockFp = fopen($this->path, 'r+');
+                if ($this->lockFp) flock($this->lockFp, LOCK_EX);
                 throw new \RuntimeException("写入验证失败，已回滚：{$this->path}");
             }
             error_log("[safe_write] 写入验证失败且回滚失败：{$this->path}");

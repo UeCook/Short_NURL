@@ -105,12 +105,13 @@ class KeyStore {
         return $data;
     }
 
-// @关键_$5：writeLockedFile — 在持有文件锁状态下安全写入 keys 数据（备份 + 写入 + 验证 + 回滚）
+// @关键_$5：writeLockedFile — 在持有文件锁状态下安全写入 keys 数据（备份 + tmp+rename + 验证 + 回滚）
     private function writeLockedFile($fp, array $data) {
         $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         $bak = $this->path . '.bak';
+        $tmp = $this->path . '.php.tmp';
 
-        // 1. 备份当前文件内容
+        // 1. 备份当前文件内容（从锁定的文件指针读取）
         fseek($fp, 0);
         $currentContent = stream_get_contents($fp);
         if ($currentContent !== false && strlen($currentContent) > 0) {
@@ -119,21 +120,23 @@ class KeyStore {
             }
         }
 
-        // 2. 原地写入
-        fseek($fp, 0);
-        ftruncate($fp, 0);
-        fwrite($fp, $json);
-        fflush($fp);
+        // 2. tmp写入 + rename 原子替换（保证无锁 readFile() 读到完整文件）
+        if (@file_put_contents($tmp, $json, LOCK_EX) === false) {
+            @unlink($tmp);
+            throw new \RuntimeException("写入临时文件失败：$tmp");
+        }
+        if (!@rename($tmp, $this->path)) {
+            @unlink($tmp);
+            throw new \RuntimeException("rename 失败：$tmp → {$this->path}");
+        }
 
         // 3. 验证写入完整性
-        fseek($fp, 0);
-        $verify = stream_get_contents($fp);
+        $verify = @file_get_contents($this->path);
         if ($verify === false || json_decode($verify, true) === null) {
+            // 3b. 验证失败 → 从备份回滚
             if (file_exists($bak) && ($bakContent = @file_get_contents($bak)) !== false) {
-                fseek($fp, 0);
-                ftruncate($fp, 0);
-                fwrite($fp, $bakContent);
-                fflush($fp);
+                @file_put_contents($tmp, $bakContent, LOCK_EX);
+                @rename($tmp, $this->path);
                 throw new \RuntimeException("写入验证失败，已回滚：{$this->path}");
             }
             error_log("[safe_write] 写入验证失败且回滚失败：{$this->path}");

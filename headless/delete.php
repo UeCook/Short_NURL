@@ -47,36 +47,41 @@ if (!$isTemp && !$isPerm) {
 // 崩溃安全：冷删成功但热未删 → 最多多一次跳转，下次请求冷无数据后自然修复
 
 // ── 从冷存储删除（使用文件锁保证读-检查-写一致性）────
-if ($isTemp) {
-    $tempStore->lockBegin();
-    try {
-        $tempData = $tempStore->readLocked();
-        // 锁内重新检查存在性（防止并发删除时两个请求都通过 404 检查）
-        if (!isset($tempData[$code])) {
-            hl_error('not_found', '该短链不存在', 404);
-        }
-        unset($tempData[$code]);
-        cleanExpiredEntries($tempData);
-        $tempStore->writeLocked($tempData);
-    } catch (\RuntimeException $e) {
-        error_log('[safe_write] ' . $e->getMessage());
-        hl_error('write_failed', '服务器内部错误', 500);
-    } finally { $tempStore->lockEnd(); }
-} else {
-    $permStore->lockBegin();
-    try {
-        $permData = $permStore->readLocked();
-        // 锁内重新检查存在性（防止并发删除时两个请求都通过 404 检查）
-        if (!isset($permData[$code])) {
-            hl_error('not_found', '该短链不存在', 404);
-        }
-        unset($permData[$code]);
-        $permStore->writeLocked($permData);
-    } catch (\RuntimeException $e) {
-        error_log('[safe_write] ' . $e->getMessage());
-        hl_error('write_failed', '服务器内部错误', 500);
-    } finally { $permStore->lockEnd(); }
-}
+    $errorResponse = null;
+    if ($isTemp) {
+        $tempStore->lockBegin();
+        try {
+            $tempData = $tempStore->readLocked();
+            if (!isset($tempData[$code])) {
+                $errorResponse = ['not_found', '该短链不存在', 404];
+            } else {
+                unset($tempData[$code]);
+                cleanExpiredEntries($tempData);
+                $tempStore->writeLocked($tempData);
+            }
+        } catch (\RuntimeException $e) {
+            error_log('[safe_write] ' . $e->getMessage());
+            $errorResponse = ['write_failed', '服务器内部错误', 500];
+        } finally { $tempStore->lockEnd(); }
+    } else {
+        $permStore->lockBegin();
+        try {
+            $permData = $permStore->readLocked();
+            if (!isset($permData[$code])) {
+                $errorResponse = ['not_found', '该短链不存在', 404];
+            } else {
+                unset($permData[$code]);
+                $permStore->writeLocked($permData);
+            }
+        } catch (\RuntimeException $e) {
+            error_log('[safe_write] ' . $e->getMessage());
+            $errorResponse = ['write_failed', '服务器内部错误', 500];
+        } finally { $permStore->lockEnd(); }
+    }
+
+    if ($errorResponse) {
+        hl_error($errorResponse[0], $errorResponse[1], $errorResponse[2]);
+    }
 
 // ── 冷存储删除成功，同步删除热存储 ─────────────────────
 // @外调用_&13：internalDelete — 无头删除接口清除热存储

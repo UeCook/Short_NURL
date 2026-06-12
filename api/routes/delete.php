@@ -56,45 +56,43 @@ if (!$isTemp && !$isPerm) {
 // 崩溃安全：冷删成功但热未删 → 最多多一次跳转，下次请求冷无数据后自然修复
 
 // ── 从冷存储删除（使用文件锁保证读-检查-写一致性）────
-if ($isTemp) {
-    $tempStore->lockBegin();
-    try {
-        $tempData = $tempStore->readLocked();
-        // 锁内重新检查存在性（防止并发删除时两个请求都通过 404 检查）
-        if (!isset($tempData[$code])) {
-            http_response_code(404);
-            echo json_encode(['error' => '该短链不存在'], JSON_UNESCAPED_UNICODE);
-            exit;
-        }
-        unset($tempData[$code]);
-        // 删除时顺便清理过期条目
-        cleanExpiredEntries($tempData);
-        $tempStore->writeLocked($tempData);
-    } catch (\Throwable $e) {
-        error_log('[safe_write] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => '服务器内部错误'], JSON_UNESCAPED_UNICODE);
+    $errorResponse = null;
+    if ($isTemp) {
+        $tempStore->lockBegin();
+        try {
+            $tempData = $tempStore->readLocked();
+            if (!isset($tempData[$code])) {
+                $errorResponse = [404, '该短链不存在'];
+            } else {
+                unset($tempData[$code]);
+                cleanExpiredEntries($tempData);
+                $tempStore->writeLocked($tempData);
+            }
+        } catch (\Throwable $e) {
+            error_log('[safe_write] ' . $e->getMessage());
+            $errorResponse = [500, '服务器内部错误'];
+        } finally { $tempStore->lockEnd(); }
+    } else {
+        $permStore->lockBegin();
+        try {
+            $permData = $permStore->readLocked();
+            if (!isset($permData[$code])) {
+                $errorResponse = [404, '该短链不存在'];
+            } else {
+                unset($permData[$code]);
+                $permStore->writeLocked($permData);
+            }
+        } catch (\Throwable $e) {
+            error_log('[safe_write] ' . $e->getMessage());
+            $errorResponse = [500, '服务器内部错误'];
+        } finally { $permStore->lockEnd(); }
+    }
+
+    if ($errorResponse) {
+        http_response_code($errorResponse[0]);
+        echo json_encode(['error' => $errorResponse[1]], JSON_UNESCAPED_UNICODE);
         exit;
-    } finally { $tempStore->lockEnd(); }
-} else {
-    $permStore->lockBegin();
-    try {
-        $permData = $permStore->readLocked();
-        // 锁内重新检查存在性（防止并发删除时两个请求都通过 404 检查）
-        if (!isset($permData[$code])) {
-            http_response_code(404);
-            echo json_encode(['error' => '该短链不存在'], JSON_UNESCAPED_UNICODE);
-            exit;
-        }
-        unset($permData[$code]);
-        $permStore->writeLocked($permData);
-    } catch (\Throwable $e) {
-        error_log('[safe_write] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => '服务器内部错误'], JSON_UNESCAPED_UNICODE);
-        exit;
-    } finally { $permStore->lockEnd(); }
-}
+    }
 
 // ── 冷存储删除成功，同步删除热存储 ─────────────────────
 // @外调用_&10：internalDelete — 前端删除接口清除热存储
