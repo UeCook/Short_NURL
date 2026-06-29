@@ -34,7 +34,7 @@ return [
     'ttl_max'          => 365 * 24 * 3600,
 
     // 保留短码（与 nginx 路由前缀对齐，禁止用户注册为自定义短码）
-    // 新增路由时需同步更新此列表。已补齐 headless / internal
+    // 新增路由时需同步更新此列表
     'reserved_codes'   => ['api', 'stat', 'admin', 'data', 'lua', 'headless', 'internal'],
 
     // 内部 OpenResty API 地址（仅本地 18500 端口，不对外暴露）
@@ -43,6 +43,5 @@ return [
     'internal_host'    => 'http://127.0.0.1:18500',   //具体内网地址请自行查阅！
     'internal_timeout' => 2.0,                        //内部接口请求超时时间（秒）
     'internal_token_path' => __DIR__ . '/../backend/data/internal_token',
-    // internal_token 不在此缓存（PHP-FPM worker 会持有整个生命周期，轮换后不生效）。
-    // 改为在 api/lua/internal.php 每次调用时从文件读取，保证 nurl -itk 轮换立即生效。
+    'internal_token'      => trim(@file_get_contents(__DIR__ . '/../backend/data/internal_token') ?: ''),
 ];
