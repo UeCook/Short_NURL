@@ -9,6 +9,32 @@
 $_lastInternalError = null;
 
 /**
+ * 每次调用从文件读取 LPA-Key 令牌（不缓存）
+ * PHP-FPM worker 生命周期内 require 只执行一次，若在 config.php 缓存则轮换后不生效。
+ * 每次调用读取一个小文件开销可接受（仅内部 API 调用时触发）。
+ *
+ * @param array $cfg  配置数组
+ * @return string  令牌原文（空字符串表示未设置）
+ */
+// @关键_$35：readInternalToken — 每次从文件读取内部令牌（避免 PHP-FPM 进程级缓存）
+function readInternalToken($cfg) {
+    $path = $cfg['internal_token_path'] ?? '';
+    if ($path === '') return '';
+    $raw = @file_get_contents($path);
+    return $raw !== false ? trim($raw) : '';
+}
+
+/**
+ * 构建内部请求的 LPA-Key 头（每次调用实时读取令牌）
+ * @param array $cfg  配置数组
+ * @return array  HTTP 头数组（令牌为空时返回空数组）
+ */
+function buildInternalHeaders($cfg) {
+    $token = readInternalToken($cfg);
+    return $token !== '' ? ['LPA-Key: ' . $token] : [];
+}
+
+/**
  * 获取最近一次内部请求的错误信息
  * @return array|null  ['type'=>'curl'|'http'|'json', 'message'=>string, 'http_code'=>int]
  */
@@ -79,7 +105,7 @@ function internalStat($cfg) {
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => $timeout,
         CURLOPT_CONNECTTIMEOUT => $timeout,
-        CURLOPT_HTTPHEADER => !empty($cfg['internal_token']) ? ['LPA-Key: ' . $cfg['internal_token']] : [],
+        CURLOPT_HTTPHEADER => buildInternalHeaders($cfg),
     ]);
     $resp = curl_exec($ch);
     $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -139,7 +165,7 @@ function internalPost($cfg, $path, $params = []) {
         CURLOPT_POSTFIELDS => json_encode($params),
         CURLOPT_HTTPHEADER => array_merge(
             ['Content-Type: application/json'],
-            !empty($cfg['internal_token']) ? ['LPA-Key: ' . $cfg['internal_token']] : []
+            buildInternalHeaders($cfg)
         ),
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => $timeout,

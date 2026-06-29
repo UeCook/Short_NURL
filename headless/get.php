@@ -14,10 +14,15 @@
 // @外接口_#9：GET /headless/api/get/{code} — 按短码查询单条短链（无头专属入口）
 require __DIR__ . '/bootstrap.php';
 
-// ── 从 PATH_INFO 提取短码 ────────────────────────────
+// ── 从 PATH_INFO 或 REQUEST_URI 提取短码 ─────────────
 $code = '';
 if (isset($_SERVER['PATH_INFO'])) {
     $code = ltrim($_SERVER['PATH_INFO'], '/');
+} elseif (isset($_SERVER['REQUEST_URI'])) {
+    // PATH_INFO 未配置时从 REQUEST_URI 兜底（取最后一段路径）
+    $uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '';
+    $segments = explode('/', trim($uri, '/'));
+    $code = end($segments) ?: '';
 }
 if (empty($code)) {
     hl_error('missing_code', '缺少短链后缀', 400);

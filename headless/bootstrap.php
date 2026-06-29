@@ -54,7 +54,8 @@ foreach ($checkFiles as $f) {
     }
 }
 if (!empty($failedFiles)) {
-    hl_error('data_inaccessible', '数据不可访问：' . implode('、', $failedFiles), 430);
+    error_log('[bootstrap] 数据文件不可访问: ' . implode(', ', $failedFiles));
+    hl_error('data_inaccessible', '数据文件不可访问，请检查文件权限', 430);
 }
 
 // ── 认证解析（与 api 链路共享同一套公共函数）─────────

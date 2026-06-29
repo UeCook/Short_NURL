@@ -28,6 +28,12 @@ if (!filter_var($url, FILTER_VALIDATE_URL) || !preg_match('#^https?://#i', $url)
     echo json_encode(['error' => '目标链接无效'], JSON_UNESCAPED_UNICODE);
     exit;
 }
+// SSRF 防护：拒绝指向内网/保留地址的链接
+if (isPrivateUrl($url)) {
+    http_response_code(400);
+    echo json_encode(['error' => '目标链接指向内网地址，已被拒绝'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
 $ttl = isset($input['ttl']) ? intval($input['ttl']) : 0;
 if ($ttl < 0 || $ttl > $cfg['ttl_max']) {
     http_response_code(400);

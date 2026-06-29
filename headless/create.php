@@ -23,6 +23,10 @@ $url = trim($input['url']);
 if (!filter_var($url, FILTER_VALIDATE_URL) || !preg_match('#^https?://#i', $url)) {
     hl_error('invalid_url', '目标链接无效', 400);
 }
+// SSRF 防护：拒绝指向内网/保留地址的链接
+if (isPrivateUrl($url)) {
+    hl_error('private_url', '目标链接指向内网地址，已被拒绝', 400);
+}
 $ttl = isset($input['ttl']) ? intval($input['ttl']) : 0;
 if ($ttl < 0 || $ttl > $cfg['ttl_max']) {
     hl_error('ttl_exceeded', 'TTL 超限', 400);

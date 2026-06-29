@@ -105,18 +105,21 @@ class KeyStore {
         return $data;
     }
 
-// @关键_$5：writeLockedFile — 在持有文件锁状态下安全写入 keys 数据（备份 + tmp+rename + 验证 + 回滚）
-    private function writeLockedFile($fp, array $data) {
+// @关键_$5：writeLockedFile — 安全写入 keys 数据（备份 + tmp+rename + 验证 + 回滚）
+    // 互斥由调用方持独立 .lock 文件锁保证（见 verify/withLock），本函数只负责安全写入。
+    // 不再依赖传入的文件指针：数据文件 rename 会换 inode，旧 fp 不再可靠。
+    private function writeLockedFile(array $data) {
         $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         $bak = $this->path . '.bak';
         $tmp = $this->path . '.php.tmp';
 
-        // 1. 备份当前文件内容（从锁定的文件指针读取）
-        fseek($fp, 0);
-        $currentContent = stream_get_contents($fp);
-        if ($currentContent !== false && strlen($currentContent) > 0) {
-            if (@file_put_contents($bak, $currentContent, LOCK_EX) === false) {
-                throw new \RuntimeException("备份失败：$bak");
+        // 1. 备份当前文件内容（直接从路径读取）
+        if (file_exists($this->path)) {
+            $currentContent = @file_get_contents($this->path);
+            if ($currentContent !== false && strlen($currentContent) > 0) {
+                if (@file_put_contents($bak, $currentContent, LOCK_EX) === false) {
+                    throw new \RuntimeException("备份失败：$bak");
+                }
             }
         }
 
@@ -153,6 +156,8 @@ class KeyStore {
      * @return string|false   'resident' / 'onetime' / 'service'，无效返回 false
      */
 // @关键_$6：verify — 验证 API Key（支持常驻 / 一次性 / 服务 Key，恒定时间比较防时序攻击）
+    // 互斥锁在独立的 .lock 文件上（c+ 模式，自动创建），数据文件可自由 rename
+    // 而不破坏互斥——锁的是 .lock 的 inode，不是数据文件的 inode。
     public function verify($rawKey) {
         if (empty($rawKey)) return false;
         if (!file_exists($this->path)) return false;
@@ -161,15 +166,19 @@ class KeyStore {
         $hash = auth_hash($rawKey);
         $now = time();
 
-        $fp = fopen($this->path, 'r+');
-        if (!$fp) {
-            error_log("[key_verify] 无法打开文件（权限不足？）：{$this->path}");
+        $lockFp = fopen($this->path . '.lock', 'c+');
+        if (!$lockFp) {
+            error_log("[key_verify] 无法打开锁文件：{$this->path}.lock");
             return false;
         }
-        flock($fp, LOCK_EX);
+        flock($lockFp, LOCK_EX);
         try {
-            fseek($fp, 0);
-            $raw = stream_get_contents($fp);
+            // 持锁状态下直接从路径读取（rename 保证原子读，锁保证无并发写者）
+            $raw = @file_get_contents($this->path);
+            if ($raw === false) {
+                error_log("[key_verify] 文件读取失败：{$this->path}");
+                return false;
+            }
             $keys = json_decode($raw, true);
             if (!is_array($keys)) {
                 error_log("[key_verify] keys.json 解码失败，内容可能损坏，路径: {$this->path}");
@@ -189,7 +198,7 @@ class KeyStore {
                     }
                     // 已过期 — 销毁
                     $keys['resident'] = null;
-                    $this->writeLockedFile($fp, $keys);
+                    $this->writeLockedFile($keys);
                     return false;
                 }
             }
@@ -206,7 +215,7 @@ class KeyStore {
             foreach ($keys['onetime_pool'] as $i => $slot) {
                 if (isset($slot['key_hash']) && is_string($slot['key_hash']) && hash_equals($slot['key_hash'], $hash)) {
                     $keys['onetime_pool'][$i]['key_hash'] = null;
-                    $this->writeLockedFile($fp, $keys);
+                    $this->writeLockedFile($keys);
                     return 'onetime';
                 }
             }
@@ -217,37 +226,42 @@ class KeyStore {
             error_log("[key_verify] 写入失败，Key 未消费: " . $e->getMessage());
             return false;
         } finally {
-            flock($fp, LOCK_UN);
-            fclose($fp);
+            flock($lockFp, LOCK_UN);
+            fclose($lockFp);
         }
     }
 
     // ── 通用锁内执行 ────────────────────────────────────
 
     /**
-     * 在 flock 排他锁内执行回调，保证 CLI 与 API 操作互斥
-     * 所有对 keys.json 的写操作都通过此方法在同一个 inode 上互斥，
-     * 避免 CLI 的 tmp+rename 与 API 的 flock 在不同 inode 上互相覆盖
+     * 在独立 .lock 文件 flock 排他锁内执行回调，保证 CLI 与 API 操作互斥
+     * 锁定独立 .lock 文件（从不 rename），数据文件 rename 换 inode 不破坏互斥。
      *
      * @param callable $callback  回调函数，接收 &$data 引用，可修改后自动写入
      * @return mixed  回调的返回值
      * @throws \RuntimeException
      */
-// @关键_$25：withLock — 在 flock 排他锁内执行回调（保证 CLI 与 API 操作互斥，统一 inode）
+// @关键_$25：withLock — 在独立 .lock 文件 flock 排他锁内执行回调（保证 CLI 与 API 操作互斥，inode 稳定）
+    // 锁定独立 .lock 文件（从不 rename），数据文件 rename 换 inode 不再破坏互斥。
+    //
+    // @param callable $callback  回调函数，接收 &$data 引用，可修改后自动写入
+    // @return mixed  回调的返回值
+    // @throws \RuntimeException
     private function withLock($callback) {
         $dir = dirname($this->path);
         if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
             throw new \RuntimeException("无法创建目录: {$dir}");
         }
-        $fp = fopen($this->path, 'c+');
-        if (!$fp) throw new \RuntimeException("无法打开文件获取锁: " . $this->path);
-        flock($fp, LOCK_EX);
+        $lockFp = fopen($this->path . '.lock', 'c+');
+        if (!$lockFp) throw new \RuntimeException("无法打开锁文件获取锁: " . $this->path . '.lock');
+        flock($lockFp, LOCK_EX);
         try {
-            fseek($fp, 0);
-            $raw = stream_get_contents($fp);
+            // 持锁状态下直接从路径读取
+            $raw = @file_get_contents($this->path);
+            if ($raw === false) $raw = '';
             $data = json_decode($raw, true);
             if (!is_array($data)) {
-                if ($raw === false || $raw === '' || $raw === null) {
+                if ($raw === '' || $raw === null) {
                     // 文件为空或不存在（首次运行），使用默认空结构
                     $data = ['resident' => null, 'onetime_pool' => []];
                 } else {
@@ -262,11 +276,11 @@ class KeyStore {
                 $data['service'] = null;
             }
             // 执行业务逻辑，回调修改 $data 后由 writeLockedFile 写入
-            $result = $callback($data, $fp);
+            $result = $callback($data);
             return $result;
         } finally {
-            flock($fp, LOCK_UN);
-            fclose($fp);
+            flock($lockFp, LOCK_UN);
+            fclose($lockFp);
         }
     }
 
@@ -278,7 +292,7 @@ class KeyStore {
      */
 // @关键_$7：generateResident — 生成新的常驻 Key（返回明文，仅此一次显示）
     public function generateResident() {
-        return $this->withLock(function(&$data, $fp) {
+        return $this->withLock(function(&$data) {
             // @外调用_&16：generateRawKey — 密钥生成（generateResident 内，Base58 编码）
             $raw = $this->generateRawKey();
 
@@ -295,7 +309,7 @@ class KeyStore {
                 'created'    => $created,
                 'expires'    => $expires,
             ];
-            $this->writeLockedFile($fp, $data);
+            $this->writeLockedFile($data);
 
             return $raw;
         });
@@ -307,7 +321,7 @@ class KeyStore {
      */
 // @关键_$8：fillPool — 将一次性 Key 池补充到最大容量
     public function fillPool() {
-        return $this->withLock(function(&$data, $fp) {
+        return $this->withLock(function(&$data) {
             $pool = &$data['onetime_pool'];
             $newKeys = [];
 
@@ -341,7 +355,7 @@ class KeyStore {
                 $newKeys[] = $raw;
             }
 
-            $this->writeLockedFile($fp, $data);
+            $this->writeLockedFile($data);
             return $newKeys;
         });
     }
@@ -354,7 +368,7 @@ class KeyStore {
      */
 // @关键_$33：generateService — 生成服务密钥（永不过期、不限使用次数，仅限无头模式）
     public function generateService($label = 'default') {
-        return $this->withLock(function(&$data, $fp) use ($label) {
+        return $this->withLock(function(&$data) use ($label) {
             if (isset($data['service']) && is_array($data['service'])) {
                 throw new \RuntimeException("服务密钥已存在，请先使用 -drop -svc 撤销旧密钥");
             }
@@ -372,7 +386,7 @@ class KeyStore {
                 'created'    => $created,
                 'label'      => $label,
             ];
-            $this->writeLockedFile($fp, $data);
+            $this->writeLockedFile($data);
 
             return $raw;
         });
@@ -382,7 +396,7 @@ class KeyStore {
 
 // @关键_$9：revoke — 吊销指定类型的 Key（常驻/一次性/服务/全部）
     public function revoke($type = 'all') {
-        $this->withLock(function(&$data, $fp) use ($type) {
+        $this->withLock(function(&$data) use ($type) {
             if ($type === 'all') {
                 $data['resident'] = null;
                 $data['onetime_pool'] = [];
@@ -396,7 +410,7 @@ class KeyStore {
             } else {
                 throw new \InvalidArgumentException("无效的吊销类型: {$type}");
             }
-            $this->writeLockedFile($fp, $data);
+            $this->writeLockedFile($data);
         });
     }
 

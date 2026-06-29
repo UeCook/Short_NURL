@@ -96,7 +96,7 @@ function cleanExpiredEntries(&$data) {
  * 避免两处维护完全相同的函数定义。
  */
 // @关键_$21/$24：getKeyStore — 获取全局 KeyStore 单例（延迟初始化，4 参数：path/tz/ttl/pool）
-if (!function_exists('getKeyStore')) {
+    if (!function_exists('getKeyStore')) {
     function getKeyStore() {
         global $cfg;
         static $instance = null;
@@ -109,5 +109,43 @@ if (!function_exists('getKeyStore')) {
             );
         }
         return $instance;
+    }
+}
+
+/**
+ * SSRF 防护：检查 URL 是否指向内网/保留地址
+ *
+ * 阻止短链指向内部服务（127.0.0.1、10.x、172.16-31.x、192.168.x、169.254.x 等），
+ * 防止通过短链跳转探测内网。先检查 IP 字面量，再 DNS 解析域名。
+ *
+ * 注意：gethostbyname 是阻塞调用，存在 DNS 解析延迟（通常 <1s）。
+ * 解析失败（返回原 hostname）时放行，避免误伤无法解析的域名。
+ *
+ * @param string $url  待检查的完整 URL
+ * @return bool  指向内网返回 true（应拒绝），公网返回 false
+ */
+// @关键_$36：isPrivateUrl — SSRF 防护检查（IP 字面量 + DNS 解析双重校验）
+if (!function_exists('isPrivateUrl')) {
+    function isPrivateUrl($url) {
+        $host = parse_url($url, PHP_URL_HOST);
+        if (!$host) return true;
+
+        // 去除 IPv6 方括号
+        $host = ltrim($host, '[');
+        $host = rtrim($host, ']');
+
+        // 直接是 IP 字面量
+        $ip = filter_var($host, FILTER_VALIDATE_IP);
+        if ($ip !== false) {
+            return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
+        }
+
+        // 域名 → DNS 解析
+        $resolved = @gethostbyname($host);
+        if ($resolved === $host) {
+            // 解析失败，放行（避免误伤，由调用方决定是否进一步限制）
+            return false;
+        }
+        return filter_var($resolved, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
     }
 }

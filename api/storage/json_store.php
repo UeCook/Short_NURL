@@ -163,34 +163,35 @@ class JsonStore {
      *       $store->lockEnd();
      *   }
      */
-// @关键_$16：lockBegin — 获取排他文件锁，用于原子读-检查-写操作
+// @关键_$16：lockBegin — 获取独立 .lock 文件的排他锁，用于原子读-检查-写操作
+    // 锁定独立 .lock 文件（c+ 模式，自动创建，从不 rename），inode 稳定。
+    // 数据文件可自由 rename（safe_write 用 tmp+rename），不破坏互斥。
     public function lockBegin() {
         // 确保目录存在（防止运行时目录被意外删除导致 fopen 失败）
         $dir = dirname($this->path);
         if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
             throw new \RuntimeException("无法创建目录: {$dir}");
         }
-        $this->lockFp = fopen($this->path, 'c+');
+        $this->lockFp = fopen($this->path . '.lock', 'c+');
         if (!$this->lockFp) {
-            throw new \RuntimeException("无法打开文件获取锁: " . $this->path);
+            throw new \RuntimeException("无法打开锁文件获取锁: " . $this->path . '.lock');
         }
         flock($this->lockFp, LOCK_EX);
     }
 
     /**
      * 在持有排他锁的状态下读取数据
-     * 从已锁定的文件指针读取，确保一致性
+     * 锁在独立 .lock 文件上，数据直接从路径读取（持锁保证无并发写者）
      * @return array  code => entry 关联数组
      */
-// @关键_$17：readLocked — 在持有排他锁状态下读取数据
+// @关键_$17：readLocked — 在持有排他锁状态下读取数据（直接从路径读，锁在独立 .lock 文件上）
     public function readLocked() {
         if (!$this->lockFp) {
             throw new \RuntimeException("未持有锁，请先调用 lockBegin()");
         }
-        fseek($this->lockFp, 0);
-        $raw = stream_get_contents($this->lockFp);
+        $raw = @file_get_contents($this->path);
         // 空文件 = 首次部署，合理返回空
-        if (empty($raw) || trim($raw) === '') {
+        if ($raw === false || trim($raw) === '') {
             return [];
         }
         $data = json_decode($raw, true);
@@ -212,7 +213,12 @@ class JsonStore {
      * @param array $data  code => entry 关联数组
      * @throws \RuntimeException  备份失败、验证失败且回滚失败
      */
-// @关键_$18：writeLocked — 在持有排他锁状态下安全写入数据（备份 + tmp+rename + 验证 + 回滚）
+// @关键_$18：writeLocked — 在持锁状态下安全写入数据（备份 + tmp+rename + 验证 + 回滚）
+    // 锁在独立 .lock 文件上（lockFp），数据文件 rename 换 inode 不影响互斥。
+    // 不再需要 rename 后释放/重开锁的逻辑——lockFp 指向 .lock 文件，inode 从不变。
+    //
+    // @param array $data  code => entry 关联数组
+    // @throws \RuntimeException  备份失败、验证失败且回滚失败
     public function writeLocked(array $data) {
         if (!$this->lockFp) {
             throw new \RuntimeException("未持有锁，请先调用 lockBegin()");
@@ -227,12 +233,13 @@ class JsonStore {
         $bak = $this->path . '.bak';
         $tmp = $this->path . '.php.tmp';
 
-        // 1. 备份当前文件内容到 .bak（从锁定的文件指针读取）
-        fseek($this->lockFp, 0);
-        $currentContent = stream_get_contents($this->lockFp);
-        if ($currentContent !== false && strlen($currentContent) > 0) {
-            if (@file_put_contents($bak, $currentContent, LOCK_EX) === false) {
-                throw new \RuntimeException("备份失败：$bak");
+        // 1. 备份当前文件内容（直接从路径读取）
+        if (file_exists($this->path)) {
+            $currentContent = @file_get_contents($this->path);
+            if ($currentContent !== false && strlen($currentContent) > 0) {
+                if (@file_put_contents($bak, $currentContent, LOCK_EX) === false) {
+                    throw new \RuntimeException("备份失败：$bak");
+                }
             }
         }
 
@@ -246,28 +253,13 @@ class JsonStore {
             throw new \RuntimeException("rename 失败：$tmp → {$this->path}");
         }
 
-        // 3. 重新打开文件指针（rename 改变了 inode，旧 fp 不再指向目标文件）
-        //    新 fp 继承排他锁语义（旧 inode 的锁随 fclose 释放，但 rename 已完成，无竞态）
-        flock($this->lockFp, LOCK_UN);
-        fclose($this->lockFp);
-        $this->lockFp = fopen($this->path, 'r+');
-        if (!$this->lockFp) {
-            throw new \RuntimeException("写入后重新打开文件失败：{$this->path}");
-        }
-        flock($this->lockFp, LOCK_EX);
-
-        // 4. 验证写入完整性
-        fseek($this->lockFp, 0);
-        $verify = stream_get_contents($this->lockFp);
+        // 3. 验证写入完整性（直接从路径读取）
+        $verify = @file_get_contents($this->path);
         if ($verify === false || json_decode($verify, true) === null) {
-            // 4b. 验证失败 → 从备份回滚（同样用 tmp+rename）
+            // 3b. 验证失败 → 从备份回滚（同样用 tmp+rename）
             if (file_exists($bak) && ($bakContent = @file_get_contents($bak)) !== false) {
                 @file_put_contents($tmp, $bakContent, LOCK_EX);
                 @rename($tmp, $this->path);
-                flock($this->lockFp, LOCK_UN);
-                fclose($this->lockFp);
-                $this->lockFp = fopen($this->path, 'r+');
-                if ($this->lockFp) flock($this->lockFp, LOCK_EX);
                 throw new \RuntimeException("写入验证失败，已回滚：{$this->path}");
             }
             error_log("[safe_write] 写入验证失败且回滚失败：{$this->path}");

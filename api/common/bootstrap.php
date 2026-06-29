@@ -42,7 +42,8 @@ require_once __DIR__ . '/../storage/json_store.php';
 require_once __DIR__ . '/../lua/internal.php';
 
 // ── 检查数据文件可读写性（认证之前，先于密钥校验）──────────────
-// 权限问题返回 430 并列出具体文件，避免误报 406"密钥失效"
+// 权限问题返回 430，避免误报 406"密钥失效"
+// 详细文件名仅写入日志，不暴露给客户端
 $checkFiles = $checkFiles ?? [
     $cfg['perm_path']  ?? '',
     $cfg['temp_path']  ?? '',
@@ -55,8 +56,16 @@ foreach ($checkFiles as $f) {
     }
 }
 if (!empty($failedFiles)) {
+    error_log('[bootstrap] 数据文件不可访问: ' . implode(', ', $failedFiles));
     http_response_code(430);
-    echo json_encode(['error' => '数据不可访问：' . implode('、', $failedFiles)], JSON_UNESCAPED_UNICODE);
+    echo json_encode(['error' => '数据文件不可访问，请检查文件权限'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// domain 占位符检测：未替换时所有生成的短链都会含 {你的域名}
+if (strpos($cfg['domain'] ?? '', '{') !== false) {
+    http_response_code(500);
+    echo json_encode(['error' => 'config.php 的 domain 尚未配置（仍含占位符）'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
