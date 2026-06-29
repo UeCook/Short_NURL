@@ -97,7 +97,7 @@ try {
         if (isset($data[$code])) { $errorResponse = ['conflict', '已占用', 409]; }
         elseif ($otherStore->find($code)) { $errorResponse = ['conflict', '已占用', 409]; }
     } else {
-        $chars = '0123456789abcdefghijklmnopqrstuvwxyz';
+        $chars = '23456789abcdefghjkmnpqrstuvwxyz';
         $maxLen = strlen($chars) - 1;
         $generated = false;
         for ($i = 0; $i < 8; $i++) {

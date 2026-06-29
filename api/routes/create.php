@@ -109,7 +109,7 @@ try {
         // 36^4 ≈ 167万空间 vs 9999上限，碰撞概率极低，这是已知的设计决策而非遗漏。
         elseif ($otherStore->find($code)) { $errorResponse = [409, '已占用']; }
     } else {
-        $chars = '0123456789abcdefghijklmnopqrstuvwxyz';
+        $chars = '23456789abcdefghjkmnpqrstuvwxyz';
         $maxLen = strlen($chars) - 1;
         $generated = false;
         for ($i = 0; $i < 8; $i++) {
