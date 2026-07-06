@@ -353,8 +353,8 @@ function doDropItk(string $tokenPath, bool $silent = false): void
     writeTokenFile($tokenPath, '');
     if (!$silent) {
         echo "已清除内部通信令牌。\n";
-        echo "内部通信将跳过认证，直到重新生成（php nurl -itk 或 php nurl -new）。\n";
-        echo "注意：需 reload nginx 后 Lua 侧才会跳过校验。\n";
+        echo "清除后内部同步接口将拒绝请求，直到重新生成令牌。\n";
+        echo "请执行 php nurl -itk 或 php nurl -new 恢复内部通信。\n";
     }
 }
 
@@ -375,7 +375,7 @@ function writeTokenFile(string $path, string $content): void
         fwrite(STDERR, "错误：rename 失败 {$tmp} → {$path}\n");
         exit(1);
     }
-    @chmod($path, 0666);
+    @chmod($path, 0600);
 }
 
 function requireNonEmptyVault(KeyStore $ks): void
@@ -438,5 +438,8 @@ function showHelp(): void
     echo "其他：\n";
     echo "  -v            查看版本\n";
     echo "  -h / -help    显示此帮助信息\n\n";
+    echo "服务密钥说明：\n";
+    echo "  服务密钥可生成 5 位短码，突破默认 9999 上限（最高 50000）。\n";
+    echo "  创建短链时使用 -len 5 参数即可。\n\n";
     echo "短链远程操作请使用：php nurl-key\n";
 }

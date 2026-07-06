@@ -28,6 +28,12 @@ if (!filter_var($url, FILTER_VALIDATE_URL) || !preg_match('#^https?://#i', $url)
     echo json_encode(['error' => '目标链接无效'], JSON_UNESCAPED_UNICODE);
     exit;
 }
+// URL 长度限制（与 Lua 侧 internal_set.lua MAX_URL_LEN 对齐）
+if (strlen($url) > 2048) {
+    http_response_code(400);
+    echo json_encode(['error' => '目标链接过长（最大 2048 字符）'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
 // SSRF 防护：拒绝指向内网/保留地址的链接
 if (isPrivateUrl($url)) {
     http_response_code(400);
@@ -48,6 +54,11 @@ $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
 $code = isset($input['code']) ? trim($input['code']) : '';
 $isCustom = !empty($code);
 
+// ── 服务密钥专用配置 ─────────────────────────────────
+$isServiceKey = ($AUTH['type'] ?? null) === 'service';
+$svcCodeLength = $isServiceKey ? ($cfg['svc_code_length'] ?? 4) : 4;
+$maxCodeLen = $isServiceKey ? 5 : 4;
+
 // ── 永久链去重（写入前查冷存储，URL 完全匹配则复用）──
 // @关键_$26：永久链去重 — ttl==0 且未传自定义短码时遍历 perm.json，URL 严格匹配则返回已有短码
 // 传了自定义短码说明用户有明确意图，去重不干预
@@ -57,8 +68,8 @@ if (!$isTemp && !$isCustom) {
     $permData = $permStore->read();
     foreach ($permData as $dedupCode => $existing) {
         if (isset($existing['url'], $existing['lurl']) && $existing['url'] === $url) {
-            // @外调用_&7：internalSet — 前端创建去重路径写入热存储
-            $dedupSynced = internalSet($cfg, $dedupCode, $existing['url'], 0, '0');
+            // @外调用_&7：internalSet — 前端创建去重路径写入热存储（带重试）
+            $dedupSynced = internalSetWithRetry($cfg, $dedupCode, $existing['url'], 0, '0');
             $dedupWarning = null;
             if (!$dedupSynced) {
                 $detail = getLastInternalError();
@@ -81,7 +92,7 @@ if (!$isTemp && !$isCustom) {
 
 if ($isCustom) {
     $code = strtolower($code);
-    if (!preg_match('/^[0-9a-z-]{1,4}$/', $code)) { http_response_code(400); echo json_encode(['error'=>'后缀格式错误'], JSON_UNESCAPED_UNICODE); exit; }
+    if (!preg_match('/^[0-9a-z-]{1,' . $maxCodeLen . '}$/', $code)) { http_response_code(400); echo json_encode(['error'=>'后缀格式错误'], JSON_UNESCAPED_UNICODE); exit; }
     if (in_array($code, $cfg['reserved_codes'])) { http_response_code(400); echo json_encode(['error'=>'保留字'], JSON_UNESCAPED_UNICODE); exit; }
 }
 
@@ -113,7 +124,7 @@ try {
         $maxLen = strlen($chars) - 1;
         $generated = false;
         for ($i = 0; $i < 8; $i++) {
-            $candidate = ''; for ($j = 0; $j < 4; $j++) $candidate .= $chars[random_int(0, $maxLen)];
+            $candidate = ''; for ($j = 0; $j < $svcCodeLength; $j++) $candidate .= $chars[random_int(0, $maxLen)];
             if (in_array($candidate, $cfg['reserved_codes'])) continue;
             if (isset($data[$candidate])) continue;
             if ($otherStore->find($candidate)) continue;
@@ -132,7 +143,14 @@ try {
     if (!$errorResponse) {
         $activeCount = 0;
         foreach ($data as $item) { if (!isExpired($item['t'] ?? null)) $activeCount++; }
-        $limit = $cfg[$isTemp ? 'temp_limit' : 'perm_limit'];
+        $limit = $isServiceKey
+            ? ($cfg[$isTemp ? 'svc_temp_limit' : 'svc_perm_limit'] ?? 9999)
+            : $cfg[$isTemp ? 'temp_limit' : 'perm_limit'];
+        // 全局总和上限验证（保护 Lua/nginx 内存，所有类型总和不超过 30000）
+        $totalLimit = ($cfg['perm_limit'] ?? 10000) + ($cfg['temp_limit'] ?? 500) + ($cfg['svc_perm_limit'] ?? 18000) + ($cfg['svc_temp_limit'] ?? 1500);
+        if ($totalLimit > 30000) {
+            $errorResponse = [500, '短链限制总和超过30000，请调整config.php'];
+        }
         if ($activeCount >= $limit) { $errorResponse = [429, '已达上限']; }
     }
     if (!$errorResponse) {
@@ -152,8 +170,8 @@ if ($errorResponse) {
     exit;
 }
 
-// @外调用_&9：internalSet — 前端创建接口写入热存储
-$synced = internalSet($cfg, $code, $url, $isTemp ? $ttl : 0, $exp_str);
+// @外调用_&9：internalSet — 前端创建接口写入热存储（带重试）
+$synced = internalSetWithRetry($cfg, $code, $url, $isTemp ? $ttl : 0, $exp_str);
 $warning = null;
 if (!$synced) {
     $detail = getLastInternalError();

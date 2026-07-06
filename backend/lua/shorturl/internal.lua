@@ -1,41 +1,58 @@
 -- internal.lua - Internal API route dispatcher
 -- Routes /internal/set, /internal/delete, /internal/stat to handlers
--- 应用层认证：校验 LPA-Key 请求头（token 来自 internal_token 文件，懒加载缓存）
+-- 应用层认证：校验 LPA-Key 请求头（token 来自 internal_token 文件，每次调用读取）
+--
+-- 注意：此前版本使用 _token_loaded 永久缓存，若首次读取时文件不存在则永久跳过
+-- 认证。现改为每次调用从文件读取，确保 nurl -itk 轮换后无需 nginx reload 即可生效。
 
 local M = {}
 
-local _token_loaded = false
-local _token_cache = ""
+local bit = require "bit"
 
+--- 每次调用从文件读取预期令牌（不缓存）
+-- 内部 API 调用频率低，每次读一个小文件开销可接受。
 local function get_expected_token()
-    if _token_loaded then
-        return _token_cache
-    end
     local path = ngx.var.su_internal_token_path
         or "/opt/shorturl/backend/data/internal_token"
     local f = io.open(path, "r")
-    if f then
-        local tok = f:read("*l")
-        f:close()
-        _token_cache = (tok and tok ~= "") and tok or ""
-    else
-        _token_cache = ""
+    if not f then
+        return ""
     end
-    _token_loaded = true
-    return _token_cache
+    local tok = f:read("*l")
+    f:close()
+    return (tok and tok ~= "") and tok or ""
+end
+
+--- 常量时间字符串比较（防时序攻击，与 PHP 侧 hash_equals 对齐）
+local function constant_time_equals(a, b)
+    if type(a) ~= "string" or type(b) ~= "string" then return false end
+    if #a ~= #b then return false end
+    local diff = 0
+    for i = 1, #a do
+        diff = bit.bor(diff, bit.bxor(string.byte(a, i), string.byte(b, i)))
+    end
+    return diff == 0
 end
 
 function M.dispatch()
     local expected = get_expected_token()
-    if expected ~= "" then
-        local token = ngx.var.http_lpa_key
-        if not token or token ~= expected then
-            ngx.status = 403
-            ngx.header["Content-Type"] = "application/json"
-            ngx.say('{"error":"Forbidden"}')
-            ngx.exit(403)
-            return
-        end
+
+    -- fail-close：token 缺失或不可读时直接拒绝，不跳过认证
+    if expected == "" then
+        ngx.status = 500
+        ngx.header["Content-Type"] = "application/json"
+        ngx.say('{"error":"internal token missing"}')
+        ngx.exit(500)
+        return
+    end
+
+    local token = ngx.var.http_lpa_key
+    if not token or not constant_time_equals(token, expected) then
+        ngx.status = 403
+        ngx.header["Content-Type"] = "application/json"
+        ngx.say('{"error":"Forbidden"}')
+        ngx.exit(403)
+        return
     end
 
     ngx.req.read_body()

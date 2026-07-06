@@ -37,9 +37,9 @@ function M.handle()
     local MAX_URL_LEN = 2048
     local MAX_TTL = 365 * 24 * 3600  -- 与 PHP config ttl_max 保持一致
 
-    -- code：与 PHP create.php 完全对齐 ^[0-9a-z-]{1,4}$（Lua 模式无 {n,m}，展开写法）
+    -- code：与 PHP create.php 完全对齐 ^[0-9a-z-]{1,5}$（Lua 模式无 {n,m}，展开写法）
     if type(code) ~= "string"
-       or not code:match("^[0-9a-z%-][0-9a-z%-]?[0-9a-z%-]?[0-9a-z%-]?$") then
+       or not code:match("^[0-9a-z%-][0-9a-z%-]?[0-9a-z%-]?[0-9a-z%-]?[0-9a-z%-]?$") then
         ngx.status = 400
         ngx.header["Content-Type"] = "application/json"
         ngx.say('{"error":"invalid code"}')
@@ -47,9 +47,9 @@ function M.handle()
         return
     end
 
-    -- url：必须以 http:// 或 https:// 开头，限制长度，拒绝控制字符和空白
+    -- url：必须以 http:// 或 https:// 开头（大小写不敏感），限制长度，拒绝控制字符和空白
     if type(url) ~= "string" or #url > MAX_URL_LEN
-       or not url:match("^https?://")
+       or not url:lower():match("^https?://")
        or url:find("[%c]") then
         ngx.status = 400
         ngx.header["Content-Type"] = "application/json"

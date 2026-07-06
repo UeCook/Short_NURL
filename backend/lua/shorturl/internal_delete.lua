@@ -36,9 +36,9 @@ function M.handle()
     local forced_type = params.type  -- "perm" or "temp" from PHP (authoritative)
 
     -- ── 输入验证（信任边界：PHP 是低特权调用方，Lua 侧必须独立防守）──
-    -- code：与 PHP create.php 完全对齐 ^[0-9a-z-]{1,4}$（Lua 模式无 {n,m}，展开写法）
+    -- code：与 PHP create.php 完全对齐 ^[0-9a-z-]{1,5}$（Lua 模式无 {n,m}，展开写法）
     if type(code) ~= "string"
-       or not code:match("^[0-9a-z%-][0-9a-z%-]?[0-9a-z%-]?[0-9a-z%-]?$") then
+       or not code:match("^[0-9a-z%-][0-9a-z%-]?[0-9a-z%-]?[0-9a-z%-]?[0-9a-z%-]?$") then
         ngx.status = 400
         ngx.header["Content-Type"] = "application/json"
         ngx.say('{"error":"invalid code"}')

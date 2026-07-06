@@ -4,37 +4,48 @@
    ═══════════════════════════════════════════════════════════ */
 
 /* ── 主题色覆盖（比 Basecoat 默认更柔和） ───────────────── */
+/* ── 全局主题色：#46a15e（修改下面一行，全站自动跟随） ──── */
 :root {
-  --background: oklch(0.985 0.002 247);
-  --foreground: oklch(0.172 0.012 258);
-  --card: oklch(0.992 0.001 247);
-  --card-foreground: oklch(0.172 0.012 258);
-  --popover: oklch(0.992 0.001 247);
-  --popover-foreground: oklch(0.172 0.012 258);
-  --muted: oklch(0.955 0.004 258);
-  --muted-foreground: oklch(0.48 0.02 258);
-  --border: oklch(0.902 0.006 258);
-  --input: oklch(0.902 0.006 258);
+  --primary:           #46a15e;
+  --primary-foreground:#ffffff;
+
+  /* 纯素灰底（chroma=0）+ 卡片极淡干净绿色度 */
+  --background: oklch(0.96 0 0);
+  --foreground: oklch(0.20 0 0);
+  --card:            oklch(0.992 0.006 145);
+  --card-foreground: oklch(0.20 0 0);
+  --popover:         oklch(0.995 0.006 145);
+  --popover-foreground: oklch(0.20 0 0);
+  --muted: oklch(0.92 0 0);
+  --muted-foreground: oklch(0.48 0 0);
+  --border: oklch(0.88 0 0);
+  --input: oklch(0.88 0 0);
+  --ring: var(--primary);
 }
 
 .dark {
-  --background: oklch(0.175 0.015 255);
-  --foreground: oklch(0.965 0.004 255);
-  --card: oklch(0.215 0.015 255);
-  --card-foreground: oklch(0.965 0.004 255);
-  --popover: oklch(0.235 0.015 255);
-  --popover-foreground: oklch(0.965 0.004 255);
-  --muted: oklch(0.275 0.015 255);
-  --muted-foreground: oklch(0.68 0.02 255);
-  --border: oklch(0.32 0.02 255 / 40%);
-  --input: oklch(0.32 0.02 255 / 50%);
-  --ring: oklch(0.55 0.03 255);
+  /* 深色模式强调色：提亮 + 提饱和，避免沉闷"沼泽绿" */
+  --primary:           oklch(0.72 0.15 150);
+  --primary-foreground:#08120b;
+
+  /* 卡片/底色：纯中性，绝不混绿（混了就像液体） */
+  --background: oklch(0.185 0 0);
+  --foreground: oklch(0.965 0 0);
+  --card:            oklch(0.232 0 0);
+  --card-foreground: oklch(0.965 0 0);
+  --popover:         oklch(0.245 0 0);
+  --popover-foreground: oklch(0.965 0 0);
+  --muted: oklch(0.27 0 0);
+  --muted-foreground: oklch(0.68 0 0);
+  --border: oklch(0.34 0 0 / 45%);
+  --input: oklch(0.34 0 0 / 55%);
+  --ring: var(--primary);
 }
 
-/* ── MiSans 字体 ────────────────────────────────────────── */
+/* ── Uecook_Sans 字体 ────────────────────────────────────────── */
 @font-face {
-  font-family: "MiSans";
-  src: url("MiSans-Medium.woff2") format("woff2");
+  font-family: "Uecook_Sans";
+  src: url("Uecook_Sans_gb2312.woff2") format("woff2");
   font-weight: 500;
   font-style: normal;
   font-display: swap;
@@ -126,7 +137,7 @@ details[open] .list-chevron {
 
 /* ── 全局字体应用 & 禁止选择 ─────────────────────────────── */
 body {
-  font-family: "MiSans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: "Uecook_Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
@@ -415,8 +426,8 @@ input[type="password"] {
   width: 3.5rem;
   height: 3.5rem;
   border-radius: 50%;
-  background: oklch(0.72 0.14 160 / 0.15);
-  color: oklch(0.55 0.15 160);
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+  color: var(--primary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -481,9 +492,9 @@ input[type="password"] {
 
 /* 复制链接按钮 — 绿色强调 */
 .success-actions #successCopyBtn {
-  background: oklch(0.55 0.15 160);
-  color: #fff;
-  border-color: oklch(0.55 0.15 160);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
 }
 
 /* 继续创建按钮 — 淡描边 */
@@ -774,7 +785,7 @@ input[type="password"] {
 }
 
 .app-toast-success .app-toast-icon {
-  color: oklch(0.55 0.15 160);
+  color: var(--primary);
 }
 
 .app-toast-error .app-toast-icon {

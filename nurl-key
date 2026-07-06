@@ -60,6 +60,8 @@ $getCode = extractValue($args, '-get');
 $addUrl  = extractValue($args, '-url');
 $addTtl  = extractValue($args, '-ttl');
 $addCode = extractValue($args, '-code');
+// 提取 -len 参数（服务密钥专用，指定生成短码长度）
+$addLen  = extractValue($args, '-len');
 // 提取 -rm 参数
 $rmCode  = extractValue($args, '-code');
 
@@ -88,7 +90,7 @@ if ($hasList) {
 } elseif ($hasGet && $getCode) {
     doGet($domain, $key, $getCode, $insecureMode);
 } elseif ($hasAdd) {
-    doAdd($domain, $key, $addUrl, $addTtl, $addCode, $insecureMode);
+    doAdd($domain, $key, $addUrl, $addTtl, $addCode, $addLen, $insecureMode);
 } elseif ($hasRm && $rmCode) {
     doRm($domain, $key, $rmCode, $insecureMode);
 } else {
@@ -110,7 +112,7 @@ if ($hasList) {
 function extractValue(array $args, string $flag): ?string
 {
     static $knownFlags = [
-        '-key', '-get', '-url', '-ttl', '-code',
+        '-key', '-get', '-url', '-ttl', '-code', '-len',
         '-add', '-rm', '-list', '-stat', '-h', '-help', '-v', '-insecure',
     ];
     $colonPrefix = $flag . ':';
@@ -304,20 +306,35 @@ function doGet(string $domain, string $key, string $code, bool $insecure = false
     echo "\n";
 }
 
-function doAdd(string $domain, string $key, ?string $url, ?string $ttl, ?string $code, bool $insecure = false): void
+function doAdd(string $domain, string $key, ?string $url, ?string $ttl, ?string $code, ?string $len, bool $insecure = false): void
 {
     if (!$url) {
         fwrite(STDERR, "错误：缺少目标链接。请使用 -url \"https://...\" 指定。\n");
         exit(1);
     }
 
-    $ttlVal = $ttl !== null ? intval($ttl) : 0;
+    if ($ttl !== null) {
+        if (!ctype_digit($ttl)) {
+            fwrite(STDERR, "错误：-ttl 必须为非负整数，得到 '{$ttl}'\n");
+            exit(1);
+        }
+        $ttlVal = intval($ttl);
+    } else {
+        $ttlVal = 0;
+    }
     $payload = [
         'url' => $url,
         'ttl' => $ttlVal,
     ];
     if ($code) {
         $payload['code'] = $code;
+    }
+    if ($len) {
+        if (!in_array($len, ['4', '5'], true)) {
+            fwrite(STDERR, "错误：-len 必须为 4 或 5，得到 '{$len}'\n");
+            exit(1);
+        }
+        $payload['len'] = intval($len);
     }
 
     echo "正在创建短链...\n";
@@ -381,7 +398,8 @@ function showHelp(): void
     echo "  -key \"su_xxx\"    API Key（必填）\n";
     echo "  -url \"https://..\" 目标长链接（-add 必填）\n";
     echo "  -ttl N           有效期秒数，0=永久（默认 0）\n";
-    echo "  -code \"abc\"      短链后缀，1-4 位（可选）\n\n";
+    echo "  -code \"abc\"      短链后缀，1-4 位（可选）\n";
+    echo "  -len N           服务密钥专用：生成短码长度，4 或 5（可选）\n\n";
     echo "标志支持两种赋值格式：\n";
     echo "  -key \"su_xxx\"    空格分隔\n";
     echo "  -key:\"su_xxx\"    冒号分隔\n\n";
@@ -396,6 +414,7 @@ function showHelp(): void
     echo "  -insecure     跳过 SSL 证书验证（仅用于内网/自签名证书）\n";
     echo "  -h / -help    显示此帮助信息\n\n";
     echo "支持的密钥类型：常驻密钥、一次性密钥、服务密钥\n";
-    echo "  服务密钥仅限无头模式使用，前端 API 将拒绝服务密钥。\n\n";
+    echo "  服务密钥仅限无头模式使用，前端 API 将拒绝服务密钥。\n";
+    echo "  服务密钥可使用 -len 5 生成 5 位短码，突破默认 9999 上限。\n\n";
     echo "本地密钥管理请使用：php nurl\n";
 }

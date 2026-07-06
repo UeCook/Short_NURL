@@ -8,15 +8,32 @@
 
 /**
  * 将 Unix 时间戳格式化为带时区偏移的 ISO 8601 字符串
+ *
+ * 支持两种时区格式：
+ *   - 偏移格式：'+08:00', '-05:00'（固定偏移，不处理夏令时）
+ *   - 时区名称：'Asia/Shanghai', 'America/New_York'（自动处理夏令时）
+ *
  * @param int $ts     Unix 时间戳
- * @param string $tz  时区偏移（ISO 8601 格式，如 '+08:00'）
+ * @param string $tz  时区偏移或时区名称
  * @return string     ISO 8601 格式的日期时间字符串
- * @throws \InvalidArgumentException  时区偏移格式无效时抛出
+ * @throws \InvalidArgumentException  时区格式无效时抛出
  */
-// @关键_$1：formatIso8601 — 将 Unix 时间戳格式化为带时区偏移的 ISO 8601 字符串
+// @关键_$1：formatIso8601 — 将 Unix 时间戳格式化为带时区偏移的 ISO 8601 字符串（支持夏令时）
 function formatIso8601($ts, $tz) {
+    // 时区名称格式（如 'Asia/Shanghai'）— 使用 DateTime 正确处理夏令时
+    if (preg_match('/^[A-Z]/i', $tz)) {
+        try {
+            $dt = new \DateTime("@$ts");
+            $dt->setTimezone(new \DateTimeZone($tz));
+            return $dt->format('Y-m-d\TH:i:sP');
+        } catch (\Exception $e) {
+            throw new \InvalidArgumentException("无效时区名称: {$tz}");
+        }
+    }
+
+    // 偏移格式（如 '+08:00'）— 固定偏移，向后兼容
     if (!preg_match('/^[+-]\d{2}:\d{2}$/', $tz)) {
-        throw new \InvalidArgumentException("无效时区偏移格式: {$tz}");
+        throw new \InvalidArgumentException("无效时区格式: {$tz}（支持偏移 '+08:00' 或时区名称 'Asia/Shanghai'）");
     }
     $sign = $tz[0];
     $parts = explode(':', substr($tz, 1));
@@ -116,36 +133,71 @@ function cleanExpiredEntries(&$data) {
  * SSRF 防护：检查 URL 是否指向内网/保留地址
  *
  * 阻止短链指向内部服务（127.0.0.1、10.x、172.16-31.x、192.168.x、169.254.x 等），
- * 防止通过短链跳转探测内网。先检查 IP 字面量，再 DNS 解析域名。
+ * 防止通过短链跳转探测内网。先检查 IP 字面量，再 DNS 解析域名（IPv4 + IPv6 双栈）。
  *
- * 注意：gethostbyname 是阻塞调用，存在 DNS 解析延迟（通常 <1s）。
- * 解析失败（返回原 hostname）时放行，避免误伤无法解析的域名。
+ * 注意：dns_get_record 是阻塞调用，存在 DNS 解析延迟（通常 <1s）。
+ * 解析失败时拒绝（更安全），避免绕过。
  *
  * @param string $url  待检查的完整 URL
  * @return bool  指向内网返回 true（应拒绝），公网返回 false
  */
-// @关键_$36：isPrivateUrl — SSRF 防护检查（IP 字面量 + DNS 解析双重校验）
+// @关键_$36：isPrivateUrl — SSRF 防护检查（IP 字面量 + DNS 双栈解析校验）
 if (!function_exists('isPrivateUrl')) {
     function isPrivateUrl($url) {
         $host = parse_url($url, PHP_URL_HOST);
         if (!$host) return true;
 
         // 去除 IPv6 方括号
-        $host = ltrim($host, '[');
-        $host = rtrim($host, ']');
+        $host = trim($host, '[]');
 
-        // 直接是 IP 字面量
+        // 直接是 IP 字面量（IPv4 / IPv6）
         $ip = filter_var($host, FILTER_VALIDATE_IP);
         if ($ip !== false) {
             return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
         }
 
-        // 域名 → DNS 解析
-        $resolved = @gethostbyname($host);
-        if ($resolved === $host) {
-            // 解析失败，放行（避免误伤，由调用方决定是否进一步限制）
-            return false;
+        // 域名 → DNS 解析（IPv4 + IPv6 双栈）
+        $records = @dns_get_record($host, DNS_A + DNS_AAAA);
+        if ($records === false || empty($records)) {
+            // 解析失败，拒绝（更安全，防止绕过）
+            return true;
         }
-        return filter_var($resolved, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
+
+        foreach ($records as $record) {
+            $ip = $record['ip'] ?? $record['ipv6'] ?? null;
+            if (!$ip) continue;
+            // 任一 IP 指向内网即拒绝
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+                return true;
+            }
+        }
+
+        return false;
     }
+}
+
+/**
+ * 带指数退避重试的 internalSet 封装
+ *
+ * 解决网络抖动导致"冷存在热不存"的问题：单次失败后短链仅存在于冷存储，
+ * 直到用户手动触发（如重复创建命中去重）才修复。
+ *
+ * @param array  $cfg        配置数组
+ * @param string $code       短码
+ * @param string $url        原始链接
+ * @param int    $ttl        TTL 秒数（0 = 永久）
+ * @param string $exp_str    ISO 8601 过期时间字符串（永久为 "0"）
+ * @param int    $maxRetries 最大重试次数（默认 3）
+ * @return bool  最终是否成功
+ */
+function internalSetWithRetry($cfg, $code, $url, $ttl, $exp_str, $maxRetries = 3) {
+    for ($i = 0; $i < $maxRetries; $i++) {
+        $result = internalSet($cfg, $code, $url, $ttl, $exp_str);
+        if ($result !== null) return true;
+        if ($i < $maxRetries - 1) {
+            // 指数退避：100ms, 200ms, 400ms
+            usleep(100000 * pow(2, $i));
+        }
+    }
+    return false;
 }
