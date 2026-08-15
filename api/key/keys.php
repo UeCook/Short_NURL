@@ -138,9 +138,12 @@ class KeyStore {
         if ($verify === false || json_decode($verify, true) === null) {
             // 3b. 验证失败 → 从备份回滚
             if (file_exists($bak) && ($bakContent = @file_get_contents($bak)) !== false) {
-                @file_put_contents($tmp, $bakContent, LOCK_EX);
-                @rename($tmp, $this->path);
-                throw new \RuntimeException("写入验证失败，已回滚：{$this->path}");
+                $rollbackWritten = @file_put_contents($tmp, $bakContent, LOCK_EX);
+                $rollbackRenamed = $rollbackWritten !== false && @rename($tmp, $this->path);
+                if ($rollbackRenamed) {
+                    throw new \RuntimeException("写入验证失败，已回滚：{$this->path}");
+                }
+                @unlink($tmp);
             }
             error_log("[safe_write] 写入验证失败且回滚失败：{$this->path}");
             throw new \RuntimeException("写入验证失败且回滚失败，请检查磁盘：{$this->path}");
@@ -166,12 +169,16 @@ class KeyStore {
         $hash = auth_hash($rawKey);
         $now = time();
 
-        $lockFp = fopen($this->path . '.lock', 'c+');
+        $lockFp = @fopen($this->path . '.lock', 'c+');
         if (!$lockFp) {
             error_log("[key_verify] 无法打开锁文件：{$this->path}.lock");
             return false;
         }
-        flock($lockFp, LOCK_EX);
+        if (!flock($lockFp, LOCK_EX)) {
+            fclose($lockFp);
+            error_log("[key_verify] 无法获取排他锁：{$this->path}.lock");
+            return false;
+        }
         try {
             // 持锁状态下直接从路径读取（rename 保证原子读，锁保证无并发写者）
             $raw = @file_get_contents($this->path);
@@ -192,7 +199,15 @@ class KeyStore {
             if (isset($keys['resident']) && is_array($keys['resident'])) {
                 $slot = $keys['resident'];
                 if (isset($slot['key_hash']) && is_string($slot['key_hash']) && hash_equals($slot['key_hash'], $hash)) {
-                    $expiresTs = strtotime($slot['expires']);
+                    // expires 字段缺失/非字符串时拒绝验证而非销毁：
+                    // strtotime(null) 在 PHP 8.0 返回 false、8.1+ 触发 Deprecation，
+                    // 直接落入"已过期 — 销毁"分支会误吊销本可用的常驻密钥
+                    $expiresStr = $slot['expires'] ?? null;
+                    if (!is_string($expiresStr) || $expiresStr === '') {
+                        error_log("[key_verify] resident 缺少 expires 字段，拒绝验证: {$this->path}");
+                        return false;
+                    }
+                    $expiresTs = strtotime($expiresStr);
                     if ($expiresTs !== false && $expiresTs > $now) {
                         return 'resident';
                     }
@@ -252,9 +267,12 @@ class KeyStore {
         if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
             throw new \RuntimeException("无法创建目录: {$dir}");
         }
-        $lockFp = fopen($this->path . '.lock', 'c+');
+        $lockFp = @fopen($this->path . '.lock', 'c+');
         if (!$lockFp) throw new \RuntimeException("无法打开锁文件获取锁: " . $this->path . '.lock');
-        flock($lockFp, LOCK_EX);
+        if (!flock($lockFp, LOCK_EX)) {
+            fclose($lockFp);
+            throw new \RuntimeException("无法获取排他锁: " . $this->path . '.lock');
+        }
         try {
             // 持锁状态下直接从路径读取
             $raw = @file_get_contents($this->path);

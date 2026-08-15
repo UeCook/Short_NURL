@@ -41,6 +41,12 @@ function hl_error($code, $message, $httpStatus) {
     exit;
 }
 
+// domain 占位符检测：未替换时所有生成的短链都会含 {你的域名}。
+// 与 api/common/bootstrap.php 的防御对齐：认证之前拦截，避免坏短链写入冷存储
+if (strpos($cfg['domain'] ?? '', '{') !== false) {
+    hl_error('config_error', 'config.php 的 domain 尚未配置（仍含占位符）', 500);
+}
+
 // ── 检查数据文件可读写性（认证之前，先于密钥校验）──────────────
 $checkFiles = [
     $cfg['perm_path']  ?? '',

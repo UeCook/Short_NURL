@@ -16,10 +16,13 @@ if (!$input) {
 }
 
 // ── 验证目标链接 ──────────────────────────────────────
-if (empty($input['url'])) {
-    hl_error('missing_url', '缺少目标链接', 400);
+if (!isset($input['url']) || !is_string($input['url'])) {
+    hl_error('missing_url', '目标链接必须为字符串', 400);
 }
 $url = trim($input['url']);
+if ($url === '') {
+    hl_error('missing_url', '缺少目标链接', 400);
+}
 if (!filter_var($url, FILTER_VALIDATE_URL) || !preg_match('#^https?://#i', $url)) {
     hl_error('invalid_url', '目标链接无效', 400);
 }
@@ -31,7 +34,13 @@ if (strlen($url) > 2048) {
 if (isPrivateUrl($url)) {
     hl_error('private_url', '目标链接指向内网地址，已被拒绝', 400);
 }
-$ttl = isset($input['ttl']) ? intval($input['ttl']) : 0;
+if (!array_key_exists('ttl', $input)) {
+    $ttl = 0;
+} elseif (!is_int($input['ttl'])) {
+    hl_error('invalid_ttl', 'TTL 必须为整数', 400);
+} else {
+    $ttl = $input['ttl'];
+}
 if ($ttl < 0 || $ttl > $cfg['ttl_max']) {
     hl_error('ttl_exceeded', 'TTL 超限', 400);
 }
@@ -40,7 +49,7 @@ $isTemp = $ttl > 0;
 $permStore = new JsonStore($cfg['perm_path'], $cfg['tz_offset']);
 $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
 
-$code = isset($input['code']) ? trim($input['code']) : '';
+$code = isset($input['code']) && is_string($input['code']) ? trim($input['code']) : '';
 $isCustom = !empty($code);
 
 // ── 服务密钥专用配置 ─────────────────────────────────
@@ -92,7 +101,13 @@ if ($isCustom) {
 $now = time();
 $domain = $cfg['domain'];
 $tz = $cfg['tz_offset'];
-$exp_str = $isTemp ? formatIso8601($now + $ttl, $tz) : '0';
+// tz_offset 配置错误时 formatIso8601 抛 InvalidArgumentException：捕获并输出结构化错误
+try {
+    $exp_str = $isTemp ? formatIso8601($now + $ttl, $tz) : '0';
+} catch (\InvalidArgumentException $e) {
+    error_log('[headless_create] 时区配置无效: ' . $e->getMessage());
+    hl_error('config_error', '时区配置无效，请检查 config.php 的 tz_offset', 500);
+}
 $shortUrl = $domain . '/' . $code;
 $entry = ['id' => $code, 'url' => $url, 'lurl' => $shortUrl];
 if ($isTemp) $entry['t'] = $exp_str;

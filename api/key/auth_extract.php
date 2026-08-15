@@ -32,7 +32,10 @@ function auth_extract(?string $rawInput = null, string $mode = 'api'): ?string {
     }
     if ($rawInput !== null && $rawInput !== '') {
         $json = json_decode($rawInput, true);
-        if (is_array($json) && isset($json['key']) && $json['key'] !== '') {
+        if (is_array($json)
+            && isset($json['key'])
+            && is_string($json['key'])
+            && $json['key'] !== '') {
             return $json['key'];
         }
     }

@@ -10,6 +10,18 @@ local M = {}
 function M.handle()
     ngx.req.read_body()
     local body = ngx.req.get_body_data()
+    if not body then
+        -- 请求体超过 client_body_buffer_size 时内容落入临时文件，
+        -- get_body_data() 返回 nil，需回退 get_body_file() 读取，否则误报 "empty body"
+        local fname = ngx.req.get_body_file()
+        if fname then
+            local f = io.open(fname, "rb")
+            if f then
+                body = f:read("*a")
+                f:close()
+            end
+        end
+    end
 
     if not body then
         ngx.status = 400
@@ -130,8 +142,12 @@ function M.handle()
 
     local ok2, err2 = su_exp:set(code, exp_str, 0)
     if not ok2 then
-        -- su_url 已写入，但 su_exp 失败 → 记录告警，不回滚（PHP 侧 synced=false 会告警）
+        su_url:delete(code)
         ngx.log(ngx.ERR, "ShortURL: su_exp:set failed for code=", code, " err=", tostring(err2))
+        ngx.status = 500
+        ngx.header["Content-Type"] = "application/json"
+        ngx.say('{"error":"su_exp write failed"}')
+        return ngx.exit(500)
     end
 
     -- Update counts for new entries only (overwrites don't change total count)

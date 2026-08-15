@@ -121,7 +121,7 @@ function M.run(premature)
     end
 
     -- Release sweep lock
-    su_meta:set("lock_sweep", 0)
+    su_meta:delete("lock_sweep")
 end
 
 return M

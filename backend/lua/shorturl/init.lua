@@ -24,21 +24,20 @@ local M = {}
 
 --- Load a JSON file and return its d field (or empty table)
 -- @param path  string  file path
--- @return table  the data object
+-- @return table, string  the data object, or nil and error message
 local function load_json(path)
-    local f = io.open(path, "r")
+    local f, open_err = io.open(path, "r")
     if not f then
-        return { v = 1, at = "0", d = {} }
+        return nil, open_err or "open failed"
     end
     local content = f:read("*a")
     f:close()
     if not content or content == "" then
-        return { v = 1, at = "0", d = {} }
+        return nil, "empty file"
     end
     local data, err = cjson.decode(content)
     if not data or type(data.d) ~= "table" then
-        ngx.log(ngx.WARN, "ShortURL: JSON decode failed for ", path, ": ", err or "unknown")
-        return { v = 1, at = "0", d = {} }
+        return nil, err or "invalid structure"
     end
     return data
 end
@@ -85,9 +84,18 @@ end
 
 --- Data loading — called from access_by_lua_block (first request per worker)
 -- Reads nginx $su_* variables, loads JSON files into shared dicts.
--- Only worker 0 executes data loading; other workers skip.
+-- Uses shared lock to ensure only one worker executes data loading.
 function M.init()
-    if ngx.worker.id() ~= 0 then return end
+    local su_meta = ngx.shared.su_meta
+
+    if su_meta:get("inited") then
+        return true
+    end
+
+    local locked = su_meta:add("init_lock", 1, 30)
+    if not locked then
+        return false
+    end
 
     local perm_path = ngx.var.su_perm_path or "/opt/shorturl/backend/data/perm.json"
     local temp_path = ngx.var.su_temp_path or "/opt/shorturl/backend/data/temp.json"
@@ -101,30 +109,43 @@ function M.init()
     local su_exp = ngx.shared.su_exp
     local su_meta = ngx.shared.su_meta
 
-    su_url:flush_all()
-    su_exp:flush_all()
-    su_meta:flush_all()
-
     local now_epoch = ngx.time()
     local perm_count = 0
     local temp_count = 0
 
-    local perm_ok, perm_data = pcall(load_json, perm_path)
-    if not perm_ok then
-        ngx.log(ngx.ERR, "ShortURL: 加载 perm.json 失败: ", tostring(perm_data), "，perm_count 将为 0")
-        perm_data = { v = 1, at = "0", d = {} }
-    end
-    for code, entry in pairs(perm_data.d) do
-        su_url:set(code, entry.url, 0)
-        su_exp:set(code, "0", 0)
-        perm_count = perm_count + 1
+    local perm_data, perm_err = load_json(perm_path)
+    local temp_data, temp_err = load_json(temp_path)
+    if not perm_data or not temp_data then
+        ngx.log(ngx.ERR, "ShortURL: cold start aborted: ", perm_err or "", " ", temp_err or "")
+        su_meta:delete("init_lock")
+        return false
     end
 
-    local temp_ok, temp_data = pcall(load_json, temp_path)
-    if not temp_ok then
-        ngx.log(ngx.ERR, "ShortURL: 加载 temp.json 失败: ", tostring(temp_data), "，temp_count 将为 0")
-        temp_data = { v = 1, at = "0", d = {} }
+    su_url:flush_all()
+    su_exp:flush_all()
+
+    local function store_entry(code, url, ttl, exp_str)
+        local ok_url, err_url = su_url:set(code, url, ttl)
+        if not ok_url then
+            ngx.log(ngx.ERR, "ShortURL: su_url:set failed code=", code, " err=", tostring(err_url))
+            return false
+        end
+
+        local ok_exp, err_exp = su_exp:set(code, exp_str, 0)
+        if not ok_exp then
+            su_url:delete(code)
+            ngx.log(ngx.ERR, "ShortURL: su_exp:set failed code=", code, " err=", tostring(err_exp))
+            return false
+        end
+        return true
     end
+
+    for code, entry in pairs(perm_data.d) do
+        if store_entry(code, entry.url, 0, "0") then
+            perm_count = perm_count + 1
+        end
+    end
+
     for code, entry in pairs(temp_data.d) do
         local t = entry.t
         if t and t ~= "0" then
@@ -132,9 +153,9 @@ function M.init()
             if exp_epoch then
                 local remaining = exp_epoch - now_epoch
                 if remaining > 0 then
-                    su_url:set(code, entry.url, remaining)
-                    su_exp:set(code, t, 0)
-                    temp_count = temp_count + 1
+                    if store_entry(code, entry.url, remaining, t) then
+                        temp_count = temp_count + 1
+                    end
                 end
             end
         end
@@ -146,11 +167,15 @@ function M.init()
     -- Overwrite expire_interval from nginx config (authoritative source)
     su_meta:set("expire_interval", expire_interval)
 
-    su_meta:set("lock_sweep", 0)
-    su_meta:set("lock_perm", 0)
-    su_meta:set("lock_temp", 0)
+    su_meta:delete("lock_sweep")
+    su_meta:delete("lock_perm")
+    su_meta:delete("lock_temp")
+
+    su_meta:set("inited", 1)
+    su_meta:delete("init_lock")
 
     ngx.log(ngx.NOTICE, "ShortURL: cold start complete, perm=", perm_count, " temp=", temp_count)
+    return true
 end
 
 return M

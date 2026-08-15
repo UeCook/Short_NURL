@@ -27,8 +27,13 @@ if (($AUTH['type'] ?? null) === 'onetime') {
 }
 
 // ── 验证短码 ─────────────────────────────────────────
-$code = isset($input['code']) ? trim($input['code']) : '';
-if (empty($code)) {
+if (!isset($input['code']) || !is_string($input['code'])) {
+    http_response_code(400);
+    echo json_encode(['error' => '短链后缀必须为字符串'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+$code = trim($input['code']);
+if ($code === '') {
     http_response_code(400);
     echo json_encode(['error' => '缺少短链后缀'], JSON_UNESCAPED_UNICODE);
     exit;
@@ -40,8 +45,16 @@ $permStore = new JsonStore($cfg['perm_path'], $cfg['tz_offset']);
 $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
 
 // ── 在冷存储中查找 ───────────────────────────────────
-$permData = $permStore->read();
-$tempData = $tempStore->read();
+// 数据文件损坏时 read() 抛 RuntimeException：捕获并输出结构化 JSON，避免空白 500
+try {
+    $permData = $permStore->read();
+    $tempData = $tempStore->read();
+} catch (\RuntimeException $e) {
+    error_log('[delete] 冷存储读取失败: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['error' => '数据文件损坏，请检查服务端日志'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
 $isTemp = isset($tempData[$code]);
 $isPerm = isset($permData[$code]);
 

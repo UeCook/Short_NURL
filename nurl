@@ -210,7 +210,8 @@ function doNew(KeyStore $ks, array $cfg, bool $longOnly, bool $fullOnly, string 
             }
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
             echo "请立即保存所有密钥，之后将不再显示。\n";
-            echo "每个密钥仅可使用一次。使用后会自动生成新密钥。\n";
+            echo "每个密钥仅可使用一次，使用后立即失效。\n";
+            echo "系统不会自动补充，请使用 'php nurl -full' 补充密钥池。\n";
             echo "密钥永不过期，直到被使用。\n\n";
         } else {
             echo "一次性密钥池已满（{$cfg['onetime_pool_size']}/{$cfg['onetime_pool_size']}）。\n\n";
@@ -344,8 +345,7 @@ function doItk(string $tokenPath): void
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
     echo "已写入：{$tokenPath}\n";
     echo "用于 PHP↔Lua 内部通信认证。\n";
-    echo "注意：轮换后需 reload nginx（如 nginx -s reload）令牌才在 Lua 侧生效，\n";
-    echo "      reload 前内部同步会返回 403（synced=false），属正常现象。\n\n";
+    echo "令牌轮换立即生效，无需 reload nginx。\n\n";
 }
 
 function doDropItk(string $tokenPath, bool $silent = false): void

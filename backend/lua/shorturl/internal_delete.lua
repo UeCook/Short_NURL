@@ -14,6 +14,18 @@ local M = {}
 function M.handle()
     ngx.req.read_body()
     local body = ngx.req.get_body_data()
+    if not body then
+        -- 请求体超过 client_body_buffer_size 时内容落入临时文件，
+        -- get_body_data() 返回 nil，需回退 get_body_file() 读取，否则误报 "empty body"
+        local fname = ngx.req.get_body_file()
+        if fname then
+            local f = io.open(fname, "rb")
+            if f then
+                body = f:read("*a")
+                f:close()
+            end
+        end
+    end
 
     if not body then
         ngx.status = 400

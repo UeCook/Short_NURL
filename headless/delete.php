@@ -22,8 +22,11 @@ if (!$input) {
 }
 
 // ── 验证短码 ─────────────────────────────────────────
-$code = isset($input['code']) ? trim($input['code']) : '';
-if (empty($code)) {
+if (!isset($input['code']) || !is_string($input['code'])) {
+    hl_error('missing_code', '短链后缀必须为字符串', 400);
+}
+$code = trim($input['code']);
+if ($code === '') {
     hl_error('missing_code', '缺少短链后缀', 400);
 }
 $code = strtolower($code);
@@ -33,8 +36,14 @@ $permStore = new JsonStore($cfg['perm_path'], $cfg['tz_offset']);
 $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
 
 // ── 在冷存储中查找 ───────────────────────────────────
-$permData = $permStore->read();
-$tempData = $tempStore->read();
+// 数据文件损坏时 read() 抛 RuntimeException：捕获并通过 hl_error 输出结构化错误
+try {
+    $permData = $permStore->read();
+    $tempData = $tempStore->read();
+} catch (\RuntimeException $e) {
+    error_log('[headless_delete] 冷存储读取失败: ' . $e->getMessage());
+    hl_error('data_corrupted', '数据文件损坏，请检查服务端日志', 500);
+}
 $isTemp = isset($tempData[$code]);
 $isPerm = isset($permData[$code]);
 

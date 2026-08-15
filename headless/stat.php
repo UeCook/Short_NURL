@@ -16,8 +16,14 @@ if (($AUTH['type'] ?? null) === 'onetime') {
 // ── 冷存储计数（始终计算，作为参考基准）──────────────────
 $permStore = new JsonStore($cfg['perm_path'], $cfg['tz_offset']);
 $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
-$cold_perm = $permStore->countActive();
-$cold_temp = $tempStore->countActive();
+// 数据文件损坏时 countActive()（内部 read()）抛 RuntimeException：捕获并通过 hl_error 输出结构化错误
+try {
+    $cold_perm = $permStore->countActive();
+    $cold_temp = $tempStore->countActive();
+} catch (\RuntimeException $e) {
+    error_log('[headless_stat] 冷存储读取失败: ' . $e->getMessage());
+    hl_error('data_corrupted', '数据文件损坏，请检查服务端日志', 500);
+}
 
 // ── 热存储计数（权威来源）──────────────────────────────
 // @外调用_&14：internalStat — 无头配额接口读取热存储计数

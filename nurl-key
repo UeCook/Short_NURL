@@ -35,6 +35,13 @@ if (!file_exists($configPath)) {
 $cfg = require $configPath;
 $domain = $cfg['domain'];
 
+// domain 占位符检测：未替换时所有生成的短链都会含 {你的域名}，
+// 与 api/common/bootstrap.php、headless/bootstrap.php 的防御对齐
+if (strpos($cfg['domain'] ?? '', '{') !== false) {
+    fwrite(STDERR, "错误：config.php 的 domain 尚未配置（仍含占位符），请先修改。\n");
+    exit(1);
+}
+
 // ── 解析参数 ─────────────────────────────────────────────
 $args = array_slice($argv, 1);
 

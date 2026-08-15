@@ -48,14 +48,11 @@ class JsonStore {
         }
         $raw = @file_get_contents($this->path);
         if ($raw === false) {
-            error_log("[json_store] 文件读取失败，路径: {$this->path}");
-            return [];
+            throw new \RuntimeException("数据文件读取失败: " . $this->path);
         }
         $data = json_decode($raw, true);
         if (!is_array($data) || !isset($data['d']) || !is_array($data['d'])) {
-            // 文件存在但内容损坏，记录日志（read 不抛异常，因为不直接触发写入）
-            error_log("[json_store] JSON 损坏，路径: {$this->path}");
-            return [];
+            throw new \RuntimeException("数据文件 JSON 损坏: " . $this->path);
         }
         return $data['d'];
     }
@@ -172,11 +169,15 @@ class JsonStore {
         if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
             throw new \RuntimeException("无法创建目录: {$dir}");
         }
-        $this->lockFp = fopen($this->path . '.lock', 'c+');
+        $this->lockFp = @fopen($this->path . '.lock', 'c+');
         if (!$this->lockFp) {
             throw new \RuntimeException("无法打开锁文件获取锁: " . $this->path . '.lock');
         }
-        flock($this->lockFp, LOCK_EX);
+        if (!flock($this->lockFp, LOCK_EX)) {
+            fclose($this->lockFp);
+            $this->lockFp = null;
+            throw new \RuntimeException("无法获取排他锁: " . $this->path . '.lock');
+        }
     }
 
     /**
@@ -189,14 +190,22 @@ class JsonStore {
         if (!$this->lockFp) {
             throw new \RuntimeException("未持有锁，请先调用 lockBegin()");
         }
-        $raw = @file_get_contents($this->path);
-        // 空文件 = 首次部署，合理返回空
-        if ($raw === false || trim($raw) === '') {
+
+        if (!file_exists($this->path)) {
             return [];
         }
+
+        $raw = @file_get_contents($this->path);
+        if ($raw === false) {
+            error_log("[json_store] 文件读取失败，路径: {$this->path}");
+            throw new \RuntimeException("数据文件读取失败: " . $this->path);
+        }
+        if (trim($raw) === '') {
+            throw new \RuntimeException("数据文件为空: " . $this->path);
+        }
+
         $data = json_decode($raw, true);
         if (!is_array($data) || !isset($data['d']) || !is_array($data['d'])) {
-            error_log("[json_store] JSON 损坏，路径: {$this->path}");
             throw new \RuntimeException("数据文件 JSON 损坏: " . $this->path);
         }
         return $data['d'];
@@ -258,9 +267,12 @@ class JsonStore {
         if ($verify === false || json_decode($verify, true) === null) {
             // 3b. 验证失败 → 从备份回滚（同样用 tmp+rename）
             if (file_exists($bak) && ($bakContent = @file_get_contents($bak)) !== false) {
-                @file_put_contents($tmp, $bakContent, LOCK_EX);
-                @rename($tmp, $this->path);
-                throw new \RuntimeException("写入验证失败，已回滚：{$this->path}");
+                $rollbackWritten = @file_put_contents($tmp, $bakContent, LOCK_EX);
+                $rollbackRenamed = $rollbackWritten !== false && @rename($tmp, $this->path);
+                if ($rollbackRenamed) {
+                    throw new \RuntimeException("写入验证失败，已回滚：{$this->path}");
+                }
+                @unlink($tmp);
             }
             error_log("[safe_write] 写入验证失败且回滚失败：{$this->path}");
             throw new \RuntimeException("写入验证失败且回滚失败，请检查磁盘：{$this->path}");

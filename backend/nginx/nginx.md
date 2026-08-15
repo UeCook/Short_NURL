@@ -8,7 +8,8 @@
 # ═══════════════════════════════════════════════════
 
     # ———— 共享字典 ——————————————————————————————————————
-    lua_shared_dict su_url       4m;
+    # su_url 10m：与 config.php 的容量假设一致（四类 limit 总和 30000 条按 10MB 内存推导）
+    lua_shared_dict su_url       10m;
     lua_shared_dict su_exp       2m;
     lua_shared_dict su_meta      1m;
     lua_shared_dict su_blocklist 1m;
@@ -197,7 +198,7 @@
         }
 
         # ~* 大小写不敏感，与其他接口对齐；PHP 侧已做 strtolower
-        location ~* "^/headless/api/get/([0-9a-zA-Z-]{1,4})$" {
+        location ~* "^/headless/api/get/([0-9a-zA-Z-]{1,5})$" {
             limit_except GET { deny all; }
             include fastcgi_params;
             fastcgi_pass $su_php_fpm;
@@ -213,17 +214,16 @@
     access_by_lua_block {
         package.path = "{prefix}/backend/lua/?.lua;;;" .. package.path
         local su_meta = ngx.shared.su_meta
-        if not su_meta:get("inited_" .. ngx.worker.id()) then
+        if not su_meta:get("inited") then
             math.randomseed(ngx.time() + ngx.worker.id())
             local init = require "shorturl.init"
             init.init()
-            su_meta:set("inited_" .. ngx.worker.id(), 1)
         end
     }
 
-    # ————★ 短链跳转（最低优先级，匹配 1-4 位字母数字）————————————————————
+    # ————★ 短链跳转（最低优先级，匹配 1-5 位字母数字）————————————————————
     # 正则中的花括号必须用双引号包裹，否则 Nginx 会报错
-    location ~* "^/([0-9a-z-]{1,4})$" {
+    location ~* "^/([0-9a-z-]{1,5})$" {
         limit_req zone=redirect_burst burst=10 nodelay;
         limit_except GET { deny all; }
         content_by_lua_block {

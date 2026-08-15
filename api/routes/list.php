@@ -20,9 +20,20 @@ if (($AUTH['type'] ?? null) === 'onetime') {
 $permStore = new JsonStore($cfg['perm_path'], $cfg['tz_offset']);
 $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
 
+// 数据文件损坏时 read() 抛 RuntimeException：捕获并输出结构化 JSON，避免空白 500
+try {
+    $permData = $permStore->read();
+    $tempData = $tempStore->read();
+} catch (\RuntimeException $e) {
+    error_log('[list] 冷存储读取失败: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['error' => '数据文件损坏，请检查服务端日志'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 // 永久短链：无 t 字段，exp 固定为 "permanent"
 $perm = [];
-foreach ($permStore->read() as $code => $item) {
+foreach ($permData as $code => $item) {
     if (!isset($item['id'], $item['url'], $item['lurl'])) continue;
     $perm[] = [
         'id'   => $item['id'],
@@ -34,7 +45,7 @@ foreach ($permStore->read() as $code => $item) {
 
 // 临时短链：用时区安全的 isExpired() 过滤过期条目
 $temp = [];
-foreach ($tempStore->read() as $code => $item) {
+foreach ($tempData as $code => $item) {
     if (!isset($item['id'], $item['url'], $item['lurl'])) continue;
     if (isExpired($item['t'] ?? null)) {
         continue;

@@ -26,8 +26,16 @@ if (($AUTH['type'] ?? null) === 'onetime') {
 // ── 冷存储计数（始终计算，作为参考基准）──────────────────
 $permStore = new JsonStore($cfg['perm_path'], $cfg['tz_offset']);
 $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
-$cold_perm = $permStore->countActive();
-$cold_temp = $tempStore->countActive();
+// 数据文件损坏时 countActive()（内部 read()）抛 RuntimeException：捕获并输出结构化 JSON
+try {
+    $cold_perm = $permStore->countActive();
+    $cold_temp = $tempStore->countActive();
+} catch (\RuntimeException $e) {
+    error_log('[stat] 冷存储读取失败: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['error' => '数据文件损坏，请检查服务端日志'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
 
 // ── 热存储计数（内部参考）──────────────────────────────
 // @外调用_&11：internalStat — 读取热存储计数（仅供内部参考）

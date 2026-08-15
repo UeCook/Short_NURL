@@ -31,7 +31,13 @@ $code = strtolower($code);
 
 // ── 查永久存储 ───────────────────────────────────────
 $permStore = new JsonStore($cfg['perm_path'], $cfg['tz_offset']);
-$permData = $permStore->read();
+// 数据文件损坏时 read() 抛 RuntimeException：捕获并通过 hl_error 输出结构化错误
+try {
+    $permData = $permStore->read();
+} catch (\RuntimeException $e) {
+    error_log('[headless_get] 冷存储读取失败: ' . $e->getMessage());
+    hl_error('data_corrupted', '数据文件损坏，请检查服务端日志', 500);
+}
 if (isset($permData[$code])) {
     $item = $permData[$code];
     if (!isset($item['id'], $item['url'], $item['lurl'])) {
@@ -48,7 +54,12 @@ if (isset($permData[$code])) {
 
 // ── 查临时存储 ───────────────────────────────────────
 $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
-$tempData = $tempStore->read();
+try {
+    $tempData = $tempStore->read();
+} catch (\RuntimeException $e) {
+    error_log('[headless_get] 冷存储读取失败: ' . $e->getMessage());
+    hl_error('data_corrupted', '数据文件损坏，请检查服务端日志', 500);
+}
 if (isset($tempData[$code])) {
     $item = $tempData[$code];
     if (!isset($item['id'], $item['url'], $item['lurl'])) {

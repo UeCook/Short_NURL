@@ -17,12 +17,17 @@ if (!$input) {
 // 认证已由 bootstrap.php 统一处理，$AUTH['valid'] === true 保证到达此处
 
 // ── 验证目标链接 ──────────────────────────────────────
-if (empty($input['url'])) {
+if (!isset($input['url']) || !is_string($input['url'])) {
+    http_response_code(400);
+    echo json_encode(['error' => '目标链接必须为字符串'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+$url = trim($input['url']);
+if ($url === '') {
     http_response_code(400);
     echo json_encode(['error' => '缺少目标链接'], JSON_UNESCAPED_UNICODE);
     exit;
 }
-$url = trim($input['url']);
 if (!filter_var($url, FILTER_VALIDATE_URL) || !preg_match('#^https?://#i', $url)) {
     http_response_code(400);
     echo json_encode(['error' => '目标链接无效'], JSON_UNESCAPED_UNICODE);
@@ -40,7 +45,15 @@ if (isPrivateUrl($url)) {
     echo json_encode(['error' => '目标链接指向内网地址，已被拒绝'], JSON_UNESCAPED_UNICODE);
     exit;
 }
-$ttl = isset($input['ttl']) ? intval($input['ttl']) : 0;
+if (!array_key_exists('ttl', $input)) {
+    $ttl = 0;
+} elseif (!is_int($input['ttl'])) {
+    http_response_code(400);
+    echo json_encode(['error' => 'TTL 必须为整数'], JSON_UNESCAPED_UNICODE);
+    exit;
+} else {
+    $ttl = $input['ttl'];
+}
 if ($ttl < 0 || $ttl > $cfg['ttl_max']) {
     http_response_code(400);
     echo json_encode(['error' => 'TTL 超限'], JSON_UNESCAPED_UNICODE);
@@ -51,7 +64,7 @@ $isTemp = $ttl > 0;
 $permStore = new JsonStore($cfg['perm_path'], $cfg['tz_offset']);
 $tempStore = new JsonStore($cfg['temp_path'], $cfg['tz_offset']);
 
-$code = isset($input['code']) ? trim($input['code']) : '';
+$code = isset($input['code']) && is_string($input['code']) ? trim($input['code']) : '';
 $isCustom = !empty($code);
 
 // ── 服务密钥专用配置 ─────────────────────────────────
@@ -65,7 +78,16 @@ $maxCodeLen = $isServiceKey ? 5 : 4;
 // 去重命中也返回固定响应结构（dedup=true），HTTP 统一为 200
 // 调用 internalSet 确保热存储同步（防止冷启动后热存储缺失该条目）
 if (!$isTemp && !$isCustom) {
-    $permData = $permStore->read();
+    // 数据文件损坏时 read() 抛 RuntimeException：此处必须捕获并输出结构化 JSON，
+    // 否则异常直达 PHP 顶层产生空白 500，前端只能兜底显示"服务器响应格式错误"
+    try {
+        $permData = $permStore->read();
+    } catch (\RuntimeException $e) {
+        error_log('[create] 冷存储读取失败: ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => '数据文件损坏，请检查服务端日志'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
     foreach ($permData as $dedupCode => $existing) {
         if (isset($existing['url'], $existing['lurl']) && $existing['url'] === $url) {
             // @外调用_&7：internalSet — 前端创建去重路径写入热存储（带重试）
@@ -99,7 +121,16 @@ if ($isCustom) {
 $now = time();
 $domain = $cfg['domain'];
 $tz = $cfg['tz_offset'];
-$exp_str = $isTemp ? formatIso8601($now + $ttl, $tz) : '0';
+// tz_offset 配置错误时 formatIso8601 抛 InvalidArgumentException：
+// 捕获并输出结构化 JSON，避免空白 500 让用户无从排查
+try {
+    $exp_str = $isTemp ? formatIso8601($now + $ttl, $tz) : '0';
+} catch (\InvalidArgumentException $e) {
+    error_log('[create] 时区配置无效: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['error' => '时区配置无效，请检查 config.php 的 tz_offset'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
 $shortUrl = $domain . '/' . $code;
 $entry = ['id' => $code, 'url' => $url, 'lurl' => $shortUrl];
 if ($isTemp) $entry['t'] = $exp_str;
