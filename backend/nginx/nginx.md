@@ -33,14 +33,17 @@
     # 内部 Lua API（仅本地访问）
     # ═══════════════════════════════════════════════════
     server {
-        # 仅绑定回环地址；若需 Docker bridge 访问，追加第二行：
-        #   listen <docker网桥IP>:18500;
-        listen 127.0.0.1:18500;
+        listen 18500;
         server_name _;
 
+        # 必须与 api/config.php 的 internal_token_path 指向同一文件
+        set $su_internal_token_path "{prefix}/backend/data/internal_token";
+
         location /internal/ {
+            # 访问控制：允许本地回环 + Docker bridge 网段
+            # 请将 172.18.0.1/16 替换为你实际的 Docker 网桥子网
             allow 127.0.0.1;
-            allow 172.18.0.0/16;  # 请将 172.18.0.0/16 替换为你实际的 Docker 网桥子网
+            allow 172.18.0.1/16;
             deny all;
 
             content_by_lua_block {
@@ -215,7 +218,6 @@
         package.path = "{prefix}/backend/lua/?.lua;;;" .. package.path
         local su_meta = ngx.shared.su_meta
         if not su_meta:get("inited") then
-            math.randomseed(ngx.time() + ngx.worker.id())
             local init = require "shorturl.init"
             init.init()
         end

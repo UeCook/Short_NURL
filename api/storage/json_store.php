@@ -23,6 +23,10 @@ class JsonStore {
     private $tz_offset;
     private $lockFp = null;
 
+    public function getPath() {
+        return $this->path;
+    }
+
     public function __construct($path, $tz_offset = '+08:00') {
         $dir = dirname($path);
         if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
@@ -289,6 +293,46 @@ class JsonStore {
             flock($this->lockFp, LOCK_UN);
             fclose($this->lockFp);
             $this->lockFp = null;
+        }
+    }
+
+    /**
+     * 同时锁定两个 Store，并以路径顺序执行回调，避免跨 Store 死锁和 TOCTOU。
+     * 回调接收 path => data 的引用数组，返回 ['write' => [path...], 'result' => value]。
+     */
+    public static function withBothLocks(JsonStore $first, JsonStore $second, callable $callback) {
+        $stores = [$first, $second];
+        usort($stores, function (JsonStore $a, JsonStore $b) {
+            return strcmp($a->getPath(), $b->getPath());
+        });
+
+        $stores[0]->lockBegin();
+        try {
+            $stores[1]->lockBegin();
+            try {
+                $data = [
+                    $stores[0]->getPath() => $stores[0]->readLocked(),
+                    $stores[1]->getPath() => $stores[1]->readLocked(),
+                ];
+                $result = $callback($data);
+                if (!is_array($result) || !isset($result['write']) || !is_array($result['write'])) {
+                    throw new \RuntimeException('双 Store 事务回调必须返回写入路径');
+                }
+                foreach ($result['write'] as $path) {
+                    if ($path === $stores[0]->getPath()) {
+                        $stores[0]->writeLocked($data[$path]);
+                    } elseif ($path === $stores[1]->getPath()) {
+                        $stores[1]->writeLocked($data[$path]);
+                    } else {
+                        throw new \RuntimeException('双 Store 事务返回了未知路径');
+                    }
+                }
+                return $result['result'] ?? null;
+            } finally {
+                $stores[1]->lockEnd();
+            }
+        } finally {
+            $stores[0]->lockEnd();
         }
     }
 }

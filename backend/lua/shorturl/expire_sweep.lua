@@ -1,9 +1,8 @@
 -- expire_sweep.lua - Periodic memory cleanup for expired temporary URLs
 -- Scans su_exp shared dict (TTL=0, always reliable) for expired entries,
--- removes them from both su_exp and su_url, and decrements temp_count.
--- Also reconciles entries that were forcibly evicted from su_url (LRU eviction)
--- but still have orphaned records in su_exp, preventing perm_count/temp_count drift.
--- Does NOT touch JSON files (cold storage is maintained exclusively by PHP)
+-- removes expired entries from both su_exp and su_url, and decrements temp_count.
+-- LRU-evicted entries are restored from JSON cold storage; they are not treated
+-- as deleted records because cold storage remains authoritative.
 -- Triggered by ngx.timer.every in init.lua (worker 0 only)
 --
 -- Design note: su_exp entries are stored with TTL=0 (managed by sweep, not
@@ -12,8 +11,38 @@
 -- on expiry, but su_url entries may disappear before sweep runs — that's fine.
 
 local time_util = require "shorturl.util.time"
+local cjson = require "cjson.safe"
 
 local M = {}
+
+local function load_cold(path)
+    if not path then return nil end
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local content = f:read("*a")
+    f:close()
+    if not content or content == "" then return nil end
+    local data = cjson.decode(content)
+    return data and type(data.d) == "table" and data.d or nil
+end
+
+local function restore_entry(su_url, su_exp, code, entry, exp_str, now_epoch)
+    if type(entry) ~= "table" or type(entry.url) ~= "string" then return false end
+    local ttl = 0
+    if exp_str ~= "0" then
+        local exp_epoch = time_util.parse_iso8601(exp_str)
+        if not exp_epoch or exp_epoch <= now_epoch then return false end
+        ttl = exp_epoch - now_epoch
+    end
+    local ok_url = su_url:set(code, entry.url, ttl)
+    if not ok_url then return false end
+    local ok_exp = su_exp:set(code, exp_str, 0)
+    if not ok_exp then
+        su_url:delete(code)
+        return false
+    end
+    return true
+end
 
 --- Run expire sweep (called by ngx.timer.every)
 -- @param premature  boolean  true if timer is exiting prematurely
@@ -35,23 +64,26 @@ function M.run(premature)
     if not ok then return end
 
     local expired_deleted = 0
-    local evicted_deleted = 0
+    local counts_reconciled = false
     local pok, perr = pcall(function()
         local now_epoch = ngx.time()
+        local perm_data = load_cold(su_meta:get("perm_path"))
+        local temp_data = load_cold(su_meta:get("temp_path"))
 
-        -- Iterate su_exp (TTL=0, always reliable) instead of su_url
-        -- su_url may have already been reclaimed by native TTL auto-expiry,
-        -- but we still need to clean up su_exp and decrement temp_count.
+        -- Iterate su_exp (TTL=0) instead of su_url. Native TTL may already have
+        -- reclaimed a temporary URL, but its cold record is still authoritative.
         local keys = su_exp:get_keys(0)
         for _, code in ipairs(keys) do
             local exp_str = su_exp:get(code)
             if exp_str then
                 if exp_str == "0" then
                     -- Permanent entry: should always exist in su_url
-                    -- If missing, it was forcibly evicted (LRU) — reconcile
+                    -- If missing, reload it from the cold store instead of deleting metadata.
                     if not su_url:get(code) then
-                        su_exp:delete(code)
-                        evicted_deleted = evicted_deleted + 1
+                        local restored = perm_data and restore_entry(su_url, su_exp, code, perm_data[code], "0", now_epoch)
+                        if not restored then
+                            ngx.log(ngx.ERR, "ShortURL: permanent entry missing from hot storage and cold restore failed: ", code)
+                        end
                     end
                 else
                     -- Use epoch comparison instead of string comparison
@@ -63,13 +95,48 @@ function M.run(premature)
                         su_exp:delete(code)
                         expired_deleted = expired_deleted + 1
                     elseif not su_url:get(code) then
-                        -- Not expired but missing from su_url → forcibly evicted (LRU)
-                        su_exp:delete(code)
-                        evicted_deleted = evicted_deleted + 1
+                        -- Not expired but missing from su_url: restore from cold storage.
+                        local restored = temp_data and restore_entry(su_url, su_exp, code, temp_data[code], exp_str, now_epoch)
+                        if not restored then
+                            ngx.log(ngx.ERR, "ShortURL: temporary entry missing from hot storage and cold restore failed: ", code)
+                        end
                     end
                 end
                 -- else: not expired and present in su_url, skip
             end
+        end
+
+        -- A su_exp eviction removes the index itself, so scan cold storage when
+        -- any shared dict eviction was reported. Cold storage remains authoritative.
+        if su_meta:get("eviction_flag") then
+            local actual_perm = 0
+            local actual_temp = 0
+            if perm_data then
+                for code, entry in pairs(perm_data) do
+                    if not su_url:get(code) then
+                        restore_entry(su_url, su_exp, code, entry, "0", now_epoch)
+                    end
+                    actual_perm = actual_perm + 1
+                end
+            end
+            if temp_data then
+                for code, entry in pairs(temp_data) do
+                    local exp_str = entry.t
+                    if exp_str and exp_str ~= "0" then
+                        local exp_epoch = time_util.parse_iso8601(exp_str)
+                        if exp_epoch and exp_epoch >= now_epoch then
+                            if not su_url:get(code) then
+                                restore_entry(su_url, su_exp, code, entry, exp_str, now_epoch)
+                            end
+                            actual_temp = actual_temp + 1
+                        end
+                    end
+                end
+            end
+            su_meta:set("perm_count", actual_perm)
+            su_meta:set("temp_count", actual_temp)
+            su_meta:delete("eviction_flag")
+            counts_reconciled = true
         end
     end)
 
@@ -77,9 +144,7 @@ function M.run(premature)
         ngx.log(ngx.ERR, "ShortURL: expire_sweep error: ", perr)
     end
 
-    local total_temp_removed = expired_deleted + evicted_deleted
-
-    if expired_deleted > 0 then
+    if expired_deleted > 0 and not counts_reconciled then
         -- Decrement temp_count by expired count
         local new_val, err = su_meta:incr("temp_count", -expired_deleted)
         if not new_val then
@@ -89,35 +154,6 @@ function M.run(premature)
             su_meta:set("temp_count", 0)
         end
         ngx.log(ngx.NOTICE, "ShortURL: expire sweep removed ", expired_deleted, " expired entries")
-    end
-
-    if evicted_deleted > 0 then
-        -- Evicted entries could be perm or temp; we don't know the breakdown.
-        -- The safest fix: reconcile by re-counting from actual data.
-        -- This is lightweight (max ~9999 entries) and only runs when evictions are detected.
-        local actual_perm = 0
-        local actual_temp = 0
-        local all_keys = su_exp:get_keys(0)
-        for _, code in ipairs(all_keys) do
-            local exp_str = su_exp:get(code)
-            if exp_str then
-                if exp_str == "0" then
-                    actual_perm = actual_perm + 1
-                else
-                    local exp_epoch = time_util.parse_iso8601(exp_str)
-                    if exp_epoch then
-                        local now_epoch = ngx.time()
-                        if exp_epoch >= now_epoch then
-                            actual_temp = actual_temp + 1
-                        end
-                    end
-                end
-            end
-        end
-        su_meta:set("perm_count", actual_perm)
-        su_meta:set("temp_count", actual_temp)
-        ngx.log(ngx.WARN, "ShortURL: expire sweep reconciled ", evicted_deleted,
-                " LRU-evicted entries, counts corrected: perm=", actual_perm, " temp=", actual_temp)
     end
 
     -- Release sweep lock

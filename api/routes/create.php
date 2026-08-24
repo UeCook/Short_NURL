@@ -138,62 +138,63 @@ if ($isTemp) $entry['t'] = $exp_str;
 $store = $isTemp ? $tempStore : $permStore;
 $otherStore = $isTemp ? $permStore : $tempStore;
 
-// ── 原子读-检查-写（避免 exit 在 try 块内）──────────
-$store->lockBegin();
+// ── 双 Store 原子读-检查-写（固定锁序，避免跨 store TOCTOU）──
 $errorResponse = null;
 try {
-    $data = $store->readLocked();
-    if ($isTemp) cleanExpiredEntries($data);
-    if ($isCustom) {
-        if (isset($data[$code])) { $errorResponse = [409, '已占用']; }
-        // 设计决策：跨 store 检查（$otherStore->find）存在极小概率竞态窗口，
-        // 因为当前仅持有 $store 的锁，$otherStore->find() 内部调用 read() 完全无锁。
-        // 36^4 ≈ 167万空间 vs 9999上限，碰撞概率极低，这是已知的设计决策而非遗漏。
-        elseif ($otherStore->find($code)) { $errorResponse = [409, '已占用']; }
-    } else {
-        $chars = '23456789abcdefghjkmnpqrstuvwxyz';
-        $maxLen = strlen($chars) - 1;
-        $generated = false;
-        for ($i = 0; $i < 8; $i++) {
-            $candidate = ''; for ($j = 0; $j < $svcCodeLength; $j++) $candidate .= $chars[random_int(0, $maxLen)];
-            if (in_array($candidate, $cfg['reserved_codes'])) continue;
-            if (isset($data[$candidate])) continue;
-            if ($otherStore->find($candidate)) continue;
-            $code = $candidate; $generated = true; break;
-        }
-        if (!$generated) {
-            $currentCount = count($data);
-            $otherCount = $otherStore->count();
-            error_log("[create] 短码生成失败：当前存储量 store={$currentCount}, other={$otherCount}, 重试8次均碰撞");
-            $errorResponse = [500, '无法生成后缀'];
+    $storePath = $store->getPath();
+    $otherPath = $otherStore->getPath();
+    $transactionResult = JsonStore::withBothLocks($permStore, $tempStore, function (&$allData) use (
+        &$code, &$shortUrl, &$entry, &$errorResponse, $isTemp, $isCustom, $svcCodeLength,
+        $cfg, $isServiceKey, $domain, $storePath, $otherPath
+    ) {
+        $data = &$allData[$storePath];
+        $otherData = &$allData[$otherPath];
+        if ($isTemp) cleanExpiredEntries($data);
+        if ($isCustom) {
+            if (isset($data[$code]) || isset($otherData[$code])) {
+                $errorResponse = [409, '已占用'];
+            }
         } else {
-            $shortUrl = $domain . '/' . $code;
-            $entry['id'] = $code; $entry['lurl'] = $shortUrl;
+            $chars = '23456789abcdefghjkmnpqrstuvwxyz';
+            $maxLen = strlen($chars) - 1;
+            $generated = false;
+            for ($i = 0; $i < 8; $i++) {
+                $candidate = '';
+                for ($j = 0; $j < $svcCodeLength; $j++) $candidate .= $chars[random_int(0, $maxLen)];
+                if (in_array($candidate, $cfg['reserved_codes'])) continue;
+                if (isset($data[$candidate]) || isset($otherData[$candidate])) continue;
+                $code = $candidate; $generated = true; break;
+            }
+            if (!$generated) {
+                error_log('[create] 短码生成失败：两个存储中均无法找到可用后缀');
+                $errorResponse = [500, '无法生成后缀'];
+            } else {
+                $shortUrl = $domain . '/' . $code;
+                $entry['id'] = $code; $entry['lurl'] = $shortUrl;
+            }
         }
-    }
-    if (!$errorResponse) {
-        $activeCount = 0;
-        foreach ($data as $item) { if (!isExpired($item['t'] ?? null)) $activeCount++; }
-        $limit = $isServiceKey
-            ? ($cfg[$isTemp ? 'svc_temp_limit' : 'svc_perm_limit'] ?? 9999)
-            : $cfg[$isTemp ? 'temp_limit' : 'perm_limit'];
-        // 全局总和上限验证（保护 Lua/nginx 内存，所有类型总和不超过 30000）
-        $totalLimit = ($cfg['perm_limit'] ?? 10000) + ($cfg['temp_limit'] ?? 500) + ($cfg['svc_perm_limit'] ?? 18000) + ($cfg['svc_temp_limit'] ?? 1500);
-        if ($totalLimit > 30000) {
-            $errorResponse = [500, '短链限制总和超过30000，请调整config.php'];
+        if (!$errorResponse) {
+            $activeCount = 0;
+            foreach ($data as $item) { if (!isExpired($item['t'] ?? null)) $activeCount++; }
+            $limit = $isServiceKey
+                ? ($cfg[$isTemp ? 'svc_temp_limit' : 'svc_perm_limit'] ?? 9999)
+                : $cfg[$isTemp ? 'temp_limit' : 'perm_limit'];
+            $totalLimit = ($cfg['perm_limit'] ?? 10000) + ($cfg['temp_limit'] ?? 500) + ($cfg['svc_perm_limit'] ?? 18000) + ($cfg['svc_temp_limit'] ?? 1500);
+            if ($totalLimit > 30000) $errorResponse = [500, '短链限制总和超过30000，请调整config.php'];
+            if ($activeCount >= $limit) $errorResponse = [429, '已达上限'];
         }
-        if ($activeCount >= $limit) { $errorResponse = [429, '已达上限']; }
-    }
-    if (!$errorResponse) {
-        $data[$code] = $entry;
-        $store->writeLocked($data);
-    }
+        if (!$errorResponse) {
+            $data[$code] = $entry;
+            return ['write' => [$storePath], 'result' => true];
+        }
+        return ['write' => [], 'result' => false];
+    });
 } catch (\Exception $e) {
     error_log('[safe_write] ' . $e->getMessage());
     http_response_code(500);
     echo json_encode(['error' => '服务器内部错误'], JSON_UNESCAPED_UNICODE);
     exit;
-} finally { $store->lockEnd(); }
+}
 
 if ($errorResponse) {
     http_response_code($errorResponse[0]);

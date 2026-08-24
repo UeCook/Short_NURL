@@ -12,7 +12,12 @@ local bit = require "bit"
 --- 每次调用从文件读取预期令牌（不缓存）
 -- 内部 API 调用频率低，每次读一个小文件开销可接受。
 local function get_expected_token()
-    local path = ngx.var.su_internal_token_path
+    -- Reading an undeclared nginx variable raises instead of returning nil.
+    local ok, configured_path = pcall(function()
+        return ngx.var.su_internal_token_path
+    end)
+    local path = (ok and configured_path and configured_path ~= "")
+        and configured_path
         or "/opt/shorturl/backend/data/internal_token"
     local f = io.open(path, "r")
     if not f then

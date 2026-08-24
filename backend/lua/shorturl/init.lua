@@ -105,6 +105,9 @@ function M.init()
     ensure_json(perm_path, tz)
     ensure_json(temp_path, tz)
 
+    su_meta:set("perm_path", perm_path)
+    su_meta:set("temp_path", temp_path)
+
     local su_url = ngx.shared.su_url
     local su_exp = ngx.shared.su_exp
     local su_meta = ngx.shared.su_meta

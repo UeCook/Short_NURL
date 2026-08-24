@@ -140,7 +140,7 @@ function M.handle()
         su_meta:set("eviction_flag", 1)
     end
 
-    local ok2, err2 = su_exp:set(code, exp_str, 0)
+    local ok2, err2, exp_forcible = su_exp:set(code, exp_str, 0)
     if not ok2 then
         su_url:delete(code)
         ngx.log(ngx.ERR, "ShortURL: su_exp:set failed for code=", code, " err=", tostring(err2))
@@ -148,6 +148,11 @@ function M.handle()
         ngx.header["Content-Type"] = "application/json"
         ngx.say('{"error":"su_exp write failed"}')
         return ngx.exit(500)
+    end
+    if exp_forcible then
+        ngx.log(ngx.ERR, "ShortURL: su_exp:set forcible eviction for code=", code,
+                " — eviction recovery will rebuild entries from cold storage")
+        su_meta:set("eviction_flag", 1)
     end
 
     -- Update counts for new entries only (overwrites don't change total count)

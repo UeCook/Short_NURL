@@ -35,7 +35,7 @@ if (PHP_SAPI !== 'cli') {
 define('NURL_VERSION', '1.2');
 
 $cliCustomVersion = <<<VERSION
-Short_NURL_Uecook : v1.10.6_BATA
+Short_NURL_Uecook : v1.11.0
 ---------------------------
 GitHub：https://uoca.top
 VERSION;

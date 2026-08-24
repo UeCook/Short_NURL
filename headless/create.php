@@ -115,54 +115,60 @@ if ($isTemp) $entry['t'] = $exp_str;
 $store = $isTemp ? $tempStore : $permStore;
 $otherStore = $isTemp ? $permStore : $tempStore;
 
-// ── 原子读-检查-写 ──────────────────────────────────
-$store->lockBegin();
+// ── 双 Store 原子读-检查-写（固定锁序，避免跨 store TOCTOU）──
 $errorResponse = null;
 try {
-    $data = $store->readLocked();
-    if ($isTemp) cleanExpiredEntries($data);
-    if ($isCustom) {
-        if (isset($data[$code])) { $errorResponse = ['conflict', '已占用', 409]; }
-        elseif ($otherStore->find($code)) { $errorResponse = ['conflict', '已占用', 409]; }
-    } else {
-        $chars = '23456789abcdefghjkmnpqrstuvwxyz';
-        $maxLen = strlen($chars) - 1;
-        $generated = false;
-        for ($i = 0; $i < 8; $i++) {
-            $candidate = ''; for ($j = 0; $j < $svcCodeLength; $j++) $candidate .= $chars[random_int(0, $maxLen)];
-            if (in_array($candidate, $cfg['reserved_codes'])) continue;
-            if (isset($data[$candidate])) continue;
-            if ($otherStore->find($candidate)) continue;
-            $code = $candidate; $generated = true; break;
-        }
-        if (!$generated) {
-            $errorResponse = ['gen_failed', '无法生成后缀', 500];
+    $storePath = $store->getPath();
+    $otherPath = $otherStore->getPath();
+    JsonStore::withBothLocks($permStore, $tempStore, function (&$allData) use (
+        &$code, &$shortUrl, &$entry, &$errorResponse, $isTemp, $isCustom, $svcCodeLength,
+        $cfg, $isServiceKey, $domain, $storePath, $otherPath
+    ) {
+        $data = &$allData[$storePath];
+        $otherData = &$allData[$otherPath];
+        if ($isTemp) cleanExpiredEntries($data);
+        if ($isCustom) {
+            if (isset($data[$code]) || isset($otherData[$code])) {
+                $errorResponse = ['conflict', '已占用', 409];
+            }
         } else {
-            $shortUrl = $domain . '/' . $code;
-            $entry['id'] = $code; $entry['lurl'] = $shortUrl;
+            $chars = '23456789abcdefghjkmnpqrstuvwxyz';
+            $maxLen = strlen($chars) - 1;
+            $generated = false;
+            for ($i = 0; $i < 8; $i++) {
+                $candidate = '';
+                for ($j = 0; $j < $svcCodeLength; $j++) $candidate .= $chars[random_int(0, $maxLen)];
+                if (in_array($candidate, $cfg['reserved_codes'])) continue;
+                if (isset($data[$candidate]) || isset($otherData[$candidate])) continue;
+                $code = $candidate; $generated = true; break;
+            }
+            if (!$generated) {
+                $errorResponse = ['gen_failed', '无法生成后缀', 500];
+            } else {
+                $shortUrl = $domain . '/' . $code;
+                $entry['id'] = $code; $entry['lurl'] = $shortUrl;
+            }
         }
-    }
-    if (!$errorResponse) {
-        $activeCount = 0;
-        foreach ($data as $item) { if (!isExpired($item['t'] ?? null)) $activeCount++; }
-        $limit = $isServiceKey
-            ? ($cfg[$isTemp ? 'svc_temp_limit' : 'svc_perm_limit'] ?? 9999)
-            : $cfg[$isTemp ? 'temp_limit' : 'perm_limit'];
-        // 全局总和上限验证（保护 Lua/nginx 内存，所有类型总和不超过 30000）
-        $totalLimit = ($cfg['perm_limit'] ?? 10000) + ($cfg['temp_limit'] ?? 500) + ($cfg['svc_perm_limit'] ?? 18000) + ($cfg['svc_temp_limit'] ?? 1500);
-        if ($totalLimit > 30000) {
-            hl_error('config_error', '短链限制总和超过30000，请调整config.php', 500);
+        if (!$errorResponse) {
+            $activeCount = 0;
+            foreach ($data as $item) { if (!isExpired($item['t'] ?? null)) $activeCount++; }
+            $limit = $isServiceKey
+                ? ($cfg[$isTemp ? 'svc_temp_limit' : 'svc_perm_limit'] ?? 9999)
+                : $cfg[$isTemp ? 'temp_limit' : 'perm_limit'];
+            $totalLimit = ($cfg['perm_limit'] ?? 10000) + ($cfg['temp_limit'] ?? 500) + ($cfg['svc_perm_limit'] ?? 18000) + ($cfg['svc_temp_limit'] ?? 1500);
+            if ($totalLimit > 30000) $errorResponse = ['config_error', '短链限制总和超过30000，请调整config.php', 500];
+            if ($activeCount >= $limit) $errorResponse = ['quota_exceeded', '已达上限', 429];
         }
-        if ($activeCount >= $limit) { $errorResponse = ['quota_exceeded', '已达上限', 429]; }
-    }
-    if (!$errorResponse) {
-        $data[$code] = $entry;
-        $store->writeLocked($data);
-    }
+        if (!$errorResponse) {
+            $data[$code] = $entry;
+            return ['write' => [$storePath], 'result' => true];
+        }
+        return ['write' => [], 'result' => false];
+    });
 } catch (\Exception $e) {
     error_log('[safe_write] ' . $e->getMessage());
     hl_error('write_failed', '服务器内部错误', 500);
-} finally { $store->lockEnd(); }
+}
 
 if ($errorResponse) {
     hl_error($errorResponse[0], $errorResponse[1], $errorResponse[2]);

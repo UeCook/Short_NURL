@@ -88,13 +88,12 @@ class KeyStore {
         }
         $raw = @file_get_contents($this->path);
         if ($raw === false) {
-            error_log("[key_readFile] 文件读取失败: " . $this->path);
-            return ['resident' => null, 'onetime_pool' => []];
+            throw new \RuntimeException("keys.json 文件读取失败: " . $this->path);
         }
         $data = json_decode($raw, true);
         if (!is_array($data)) {
             error_log("[key_readFile] keys.json 解码失败，内容可能损坏: " . $this->path);
-            return ['resident' => null, 'onetime_pool' => []];
+            throw new \RuntimeException("keys.json 数据损坏，请手动检查: " . $this->path);
         }
         if (!isset($data['onetime_pool']) || !is_array($data['onetime_pool'])) {
             $data['onetime_pool'] = [];
@@ -201,7 +200,7 @@ class KeyStore {
                 if (isset($slot['key_hash']) && is_string($slot['key_hash']) && hash_equals($slot['key_hash'], $hash)) {
                     // expires 字段缺失/非字符串时拒绝验证而非销毁：
                     // strtotime(null) 在 PHP 8.0 返回 false、8.1+ 触发 Deprecation，
-                    // 直接落入"已过期 — 销毁"分支会误吊销本可用的常驻密钥
+                    // 缺失字段必须视为损坏，而不是视为过期并修改文件。
                     $expiresStr = $slot['expires'] ?? null;
                     if (!is_string($expiresStr) || $expiresStr === '') {
                         error_log("[key_verify] resident 缺少 expires 字段，拒绝验证: {$this->path}");
@@ -211,9 +210,8 @@ class KeyStore {
                     if ($expiresTs !== false && $expiresTs > $now) {
                         return 'resident';
                     }
-                    // 已过期 — 销毁
-                    $keys['resident'] = null;
-                    $this->writeLockedFile($keys);
+                    // 验证路径保持只读；过期密钥由独立维护操作清理。
+                    error_log("[key_verify] resident 已过期: {$this->path}");
                     return false;
                 }
             }
@@ -279,9 +277,11 @@ class KeyStore {
             if ($raw === false) $raw = '';
             $data = json_decode($raw, true);
             if (!is_array($data)) {
-                if ($raw === '' || $raw === null) {
-                    // 文件为空或不存在（首次运行），使用默认空结构
+                if (!file_exists($this->path)) {
+                    // 只有文件不存在才允许首次初始化。
                     $data = ['resident' => null, 'onetime_pool' => []];
+                } elseif ($raw === '' || $raw === null) {
+                    throw new \RuntimeException("keys.json 文件为空，拒绝覆盖: " . $this->path);
                 } else {
                     error_log("[key_withLock] keys.json 解码失败，内容可能损坏，路径: {$this->path}");
                     throw new \RuntimeException("keys.json 数据损坏，请手动检查: " . $this->path);
