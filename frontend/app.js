@@ -11,14 +11,15 @@
   /* ── 配置 ──────────────────────────────────────────────── */
   var API_BASE = "./api";
   var isPermanent = false; // 切换组状态：临时（默认） / 永久
-  var manageListLoaded = false; // 追踪管理列表是否已加载
 
   /* ── DOM 辅助函数 ──────────────────────────────────────── */
   function $(sel) { return document.querySelector(sel); }
 
   /* ── 主题管理 ──────────────────────────────────────────── */
   function initTheme() {
-    var stored = localStorage.getItem("su_theme");
+    var stored = null;
+    // 隐私模式/禁用存储的浏览器中 localStorage 访问可能抛异常，防御性读取
+    try { stored = localStorage.getItem("su_theme"); } catch (e) { /* 忽略 */ }
     // 默认深色模式，仅当明确保存为 "light" 时切换为浅色
     if (stored === "light") {
       document.documentElement.classList.remove("dark");
@@ -29,7 +30,7 @@
 
   function toggleTheme() {
     var isDark = document.documentElement.classList.toggle("dark");
-    localStorage.setItem("su_theme", isDark ? "dark" : "light");
+    try { localStorage.setItem("su_theme", isDark ? "dark" : "light"); } catch (e) { /* 忽略 */ }
   }
 
   /* ── Toast 提示通知 ────────────────────────────────────── */
@@ -172,10 +173,10 @@
 
     preset.addEventListener("change", function () {
       if (preset.value === "custom") {
-        customBox.style.display = "";
+        if (customBox) customBox.style.display = "";
         setDefaultDatetime();
       } else {
-        customBox.style.display = "none";
+        if (customBox) customBox.style.display = "none";
       }
     });
   }
@@ -197,14 +198,16 @@
   function getTTL() {
     if (isPermanent) return 0;
 
-    var presetVal = $("#ttlPreset").value;
+    var presetEl = $("#ttlPreset");
+    if (!presetEl) return null;
+    var presetVal = presetEl.value;
     if (presetVal === "custom") {
       var dtVal = $("#ttlDatetime").value;
-      if (!dtVal) return 604800;
+      if (!dtVal) return null;
       var target = new Date(dtVal).getTime();
-      var now = Date.now();
-      var diff = Math.floor((target - now) / 1000);
-      return diff > 0 ? diff : 0;
+      if (!Number.isFinite(target)) return null;
+      var diff = Math.floor((target - Date.now()) / 1000);
+      return diff > 0 ? diff : null;
     }
     return parseInt(presetVal, 10) || 604800;
   }
@@ -217,16 +220,6 @@
    *   - 热存储可用且有差异时 → 附带热存参考值供诊断
    *   - 热存储不可用 → 附带 ⚠ 标记提示
    */
-  function loadStat(key) {
-    if (!key) { renderStat(null); return; }
-    apiGet("/stat", key)
-      .then(function (data) { renderStat(data); })
-      .catch(function (err) {
-        showToast(err.message || "获取配额失败", "error");
-        renderStat(null);
-      });
-  }
-
   function renderStat(data) {
     var permEl = $("#statPermValue");
     var tempEl = $("#statTempValue");
@@ -264,12 +257,17 @@
 
     var url = ($("#urlInput").value || "").trim();
     var code = ($("#codeInput").value || "").trim();
-    var ttl = getTTL();
     var key = getCreateKey();
 
     if (!url) { showToast("请输入目标链接", "error"); return; }
     if (!/^https?:\/\//i.test(url)) { showToast("链接必须以 http:// 或 https:// 开头", "error"); return; }
     if (!key) { showToast("请输入 API Key", "error"); return; }
+
+    var ttl = getTTL();
+    if (ttl === null) {
+      showToast("请选择有效的未来过期时间", "error");
+      return;
+    }
 
     var body = { url: url, ttl: ttl, key: key };
     if (code) body.code = code;
@@ -334,28 +332,26 @@
     if (urlInput) urlInput.focus();
   }
 
-  function copySuccessLink() {
-    var url = ($("#successUrl").textContent || "").trim();
-    if (!url) return;
+  // 统一的剪贴板复制封装：非安全上下文（HTTP 直连/IP 访问）下
+  // navigator.clipboard 为 undefined，需先做存在性检查再调用，
+  // 否则会同步抛出 TypeError（Promise 的 .catch 捕获不到同步异常）。
+  function copyText(url) {
+    if (!navigator.clipboard) {
+      showToast("当前环境不支持剪贴板复制，请手动复制", "error");
+      return;
+    }
     navigator.clipboard.writeText(url)
       .then(function () { showToast("已复制到剪贴板"); })
       .catch(function () { showToast("复制失败", "error"); });
   }
 
-  /* ── 短链列表 ──────────────────────────────────────────── */
-  function loadList(key) {
-    if (!key) { renderList(null, null); return; }
-    apiGet("/list", key)
-      .then(function (data) {
-        renderList(data.permanent || [], data.temporary || []);
-        manageListLoaded = true;
-      })
-      .catch(function (err) {
-        showToast(err.message || "获取列表失败", "error");
-        renderList(null, null);
-      });
+  function copySuccessLink() {
+    var url = ($("#successUrl").textContent || "").trim();
+    if (!url) return;
+    copyText(url);
   }
 
+  /* ── 短链列表 ──────────────────────────────────────────── */
   function renderList(permList, tempList) {
     var permEl = $("#permList");
     var tempEl = $("#tempList");
@@ -416,47 +412,51 @@
             } else {
               showToast("短链 " + code + " 已删除");
             }
-            refreshManageData();
+            refreshManageData().catch(function (err) {
+              showToast(err.message || "刷新失败", "error");
+            });
           })
           .catch(function (err) { showToast(err.message || "删除失败", "error"); });
       });
   }
 
   function handleCopy(url) {
-    navigator.clipboard.writeText(url)
-      .then(function () { showToast("已复制到剪贴板"); })
-      .catch(function () { showToast("复制失败", "error"); });
+    copyText(url);
   }
 
+  // 刷新统计数据与列表：任一请求失败时整体 reject，
+  // 由调用方决定错误提示（避免"列表已刷新"与实际失败相矛盾）。
   function refreshManageData() {
     var key = getManageKey();
-    manageListLoaded = false;
-    if (!key) { renderStat(null); renderList(null, null); return; }
+    if (!key) { renderStat(null); renderList(null, null); return Promise.resolve(); }
 
     var errorShown = false;
+    var firstError = null;
+    var promises = [];
 
-    apiGet("/stat", key)
-      .then(function (data) { renderStat(data); })
-      .catch(function (err) {
-        if (!errorShown) {
-          errorShown = true;
-          showToast(err.message || "获取配额失败", "error");
-        }
-        renderStat(null);
-      });
+    promises.push(
+      apiGet("/stat", key)
+        .then(function (data) { renderStat(data); })
+        .catch(function (err) {
+          if (!errorShown) { errorShown = true; firstError = err; }
+          renderStat(null);
+        })
+    );
 
-    apiGet("/list", key)
-      .then(function (data) {
-        renderList(data.permanent || [], data.temporary || []);
-        manageListLoaded = true;
-      })
-      .catch(function (err) {
-        if (!errorShown) {
-          errorShown = true;
-          showToast(err.message || "获取列表失败", "error");
-        }
-        renderList(null, null);
-      });
+    promises.push(
+      apiGet("/list", key)
+        .then(function (data) {
+          renderList(data.permanent || [], data.temporary || []);
+        })
+        .catch(function (err) {
+          if (!errorShown) { errorShown = true; firstError = err; }
+          renderList(null, null);
+        })
+    );
+
+    return Promise.all(promises).then(function () {
+      if (firstError) throw firstError;
+    });
   }
 
   /* ── 列表操作事件委托 ─────────────────────────────────── */
@@ -486,7 +486,9 @@
     var listTabs = $("#manageListTabs");
     if (statsBar) statsBar.style.display = "";
     if (listTabs) listTabs.style.display = "";
-    refreshManageData();
+    refreshManageData().catch(function (err) {
+      showToast(err.message || "刷新失败", "error");
+    });
   }
 
   /* ── 标签页切换（toggle-group 滑动动画风格） ─────────── */
@@ -588,10 +590,19 @@
       thumb.style.transform = "translateY(" + top + "px)";
     }
 
+    // scroll 事件高频触发：update() 内读取 scrollHeight/clientHeight 会强制同步布局，
+    // 用 rAF 节流合并为每帧一次，避免 layout thrash 导致滚动掉帧。
+    var ticking = false;
     window.addEventListener("scroll", function () {
       show();
-      update();
       scheduleHide();
+      if (!ticking) {
+        ticking = true;
+        requestAnimationFrame(function () {
+          update();
+          ticking = false;
+        });
+      }
     }, { passive: true });
 
     window.addEventListener("resize", update);
@@ -700,17 +711,25 @@
 
   /* ── 禁止复制和右键 ───────────────────────────────────── */
   function initCopyProtection() {
+    // 是否处于表单输入控件内 — 输入框内放行复制/剪切/快捷键，
+    // 与页面自带的复制功能共存，用户可手动选择复制
+    function isFormField(target) {
+      var tag = (target && target.tagName || "").toLowerCase();
+      return tag === "input" || tag === "textarea";
+    }
+
     // 禁止右键菜单
     document.addEventListener("contextmenu", function (e) {
       e.preventDefault();
     });
 
-    // 禁止复制、剪切
-    document.addEventListener("copy", function (e) { e.preventDefault(); });
-    document.addEventListener("cut", function (e) { e.preventDefault(); });
+    // 禁止复制、剪切（表单输入框内放行）
+    document.addEventListener("copy", function (e) { if (!isFormField(e.target)) e.preventDefault(); });
+    document.addEventListener("cut", function (e) { if (!isFormField(e.target)) e.preventDefault(); });
 
-    // 禁止相关键盘快捷键
+    // 禁止相关键盘快捷键（表单输入框内放行）
     document.addEventListener("keydown", function (e) {
+      if (isFormField(e.target)) return; // 放行表单内快捷键
       // Ctrl/Cmd + C (复制), U (查看源码), S (保存), A (全选), P (打印)
       if ((e.ctrlKey || e.metaKey) && /^[cusap]$/i.test(e.key)) {
         e.preventDefault();
@@ -759,8 +778,13 @@
     var refreshBtn = $("#listRefreshBtn");
     if (refreshBtn) {
       refreshBtn.addEventListener("click", function () {
-        refreshManageData();
-        showToast("列表已刷新");
+        refreshManageData()
+          .then(function () {
+            showToast("列表已刷新");
+          })
+          .catch(function (err) {
+            showToast(err.message || "刷新失败", "error");
+          });
       });
     }
   }
