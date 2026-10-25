@@ -1,0 +1,53 @@
+{
+  "server": {
+    "listen": "127.0.0.1:8080",
+    "max_body_bytes": 1048576,
+    "read_header_timeout_seconds": 5,
+    "read_timeout_seconds": 10,
+    "write_timeout_seconds": 15,
+    "idle_timeout_seconds": 60,
+    "shutdown_timeout_seconds": 10
+  },
+  "site": {
+    "domain": "https://",
+    "panel_origin": "",
+    "panel_enabled": true,
+    "tz_offset": "+08:00"
+  },
+  "storage": {
+    "base_dir": "..",
+    "perm_path": "backend/data/perm.json",
+    "temp_path": "backend/data/temp.json",
+    "keys_path": "backend/data/keys.json",
+    "internal_token_path": "backend/data/internal_token"
+  },
+  "keys": {
+    "ttl_days": 7,
+    "onetime_pool_size": 20
+  },
+  "quota": {
+    "perm_limit": 10000,
+    "temp_limit": 500,
+    "svc_perm_limit": 10000,
+    "svc_temp_limit": 500
+  },
+  "codes": {
+    "svc_code_length": 4,
+    "ttl_max": 31536000,
+    "reserved_codes": ["api", "stat", "admin", "data", "lua", "headless", "internal", "nurl"]
+  },
+  "internal": {
+    "host": "http://127.0.0.1:18500",
+    "timeout_seconds": 2.0,
+    "max_retries": 3,
+    "backoff_ms": 100
+  },
+  "policy": {
+    "cold_fallback": false
+  },
+  "log": {
+    "level": "info",
+    "format": "text",
+    "access_log": false
+  }
+}
