@@ -4,7 +4,8 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 
 Short_NURL by Uecook / 圣堂之魂
-GitHub：https://github.com/UeCook/Short_NURL_Two
+
+GitHub：https://github.com/UeCook/Short_NURL
 
 NOTICE: In accordance with Section 4(d) of the Apache License 2.0, 
 any distribution of this software or derivative works MUST publicly 
