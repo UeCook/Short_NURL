@@ -1,0 +1,18 @@
+{
+    "v": 1,
+    "at": "2026-10-24T12:00:00+08:00",
+    "d": {
+        "live1": {
+            "id": "live1",
+            "url": "https://example.com/live",
+            "lurl": "https://s.example.com/live1",
+            "t": "2099-10-25T12:00:00+08:00"
+        },
+        "dead1": {
+            "id": "dead1",
+            "url": "https://example.com/dead",
+            "lurl": "https://s.example.com/dead1",
+            "t": "2020-10-25T12:00:00+08:00"
+        }
+    }
+}

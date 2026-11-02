@@ -1,0 +1,2 @@
+/* Apply the saved theme before the page renders. */
+(function(){try{var t=localStorage.getItem("su_theme");if(t==="light"){document.documentElement.classList.remove("dark");document.documentElement.style.colorScheme="light"}else{document.documentElement.classList.add("dark");document.documentElement.style.colorScheme="dark"}}catch(e){document.documentElement.classList.add("dark");document.documentElement.style.colorScheme="dark"}})();
