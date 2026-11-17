@@ -29,20 +29,15 @@ func (s *Services) Delete(authCtx *auth.Context, code string) BizResponse {
 	var operationLock *opLock
 	synced := false
 
-	permPath := s.Perm.Path()
-	tempPath := s.Temp.Path()
-
-	fail := func(resp BizResponse) BizResponse {
+	defer func() {
+		defer operationLock.release()
 		if mutationStarted {
 			s.Hot.EndMutation(code)
-			mutationStarted = false
 		}
-		if operationLock != nil {
-			operationLock.release()
-			operationLock = nil
-		}
-		return resp
-	}
+	}()
+
+	permPath := s.Perm.Path()
+	tempPath := s.Temp.Path()
 
 	_, err := store.WithBothLocks(s.Perm, s.Temp, func(all map[string]store.Data) (*store.TxResult, error) {
 		if all[tempPath].Has(code) {
@@ -71,15 +66,15 @@ func (s *Services) Delete(authCtx *auth.Context, code string) BizResponse {
 		return &store.TxResult{Write: []string{}, Result: true}, nil
 	})
 	if err != nil {
-		return fail(Error("write_failed", "服务器内部错误", 500))
+		return Error("write_failed", "服务器内部错误", 500)
 	}
 	if errorResponse != nil {
-		return fail(*errorResponse)
+		return *errorResponse
 	}
 
 	mutationStarted = s.Hot.BeginMutation(code)
 	if !mutationStarted && !cfg.Policy.ColdFallback {
-		return fail(Error("hot_store_unavailable", "热存储暂不可用，短链未删除", 503))
+		return Error("hot_store_unavailable", "热存储暂不可用，短链未删除", 503)
 	}
 	if !mutationStarted {
 		slog.Warn("[delete] mutation 未确认，继续冷删除兜底", "code", code)
@@ -89,7 +84,7 @@ func (s *Services) Delete(authCtx *auth.Context, code string) BizResponse {
 	synced = s.Hot.DeleteWithRetry(code, deletedType)
 	if !synced && !cfg.Policy.ColdFallback {
 		s.restoreHotEntry(code, deletedType, deletedEntry)
-		return fail(Error("hot_store_unavailable", "热存储暂不可用，短链未删除", 503))
+		return Error("hot_store_unavailable", "热存储暂不可用，短链未删除", 503)
 	}
 
 	_, err = store.WithBothLocks(s.Perm, s.Temp, func(all map[string]store.Data) (*store.TxResult, error) {
@@ -110,16 +105,7 @@ func (s *Services) Delete(authCtx *auth.Context, code string) BizResponse {
 				s.restoreHotEntry(code, deletedType, deletedEntry)
 			}
 		}
-		return fail(Error("write_failed", "服务器内部错误", 500))
-	}
-
-	if mutationStarted {
-		s.Hot.EndMutation(code)
-		mutationStarted = false
-	}
-	if operationLock != nil {
-		operationLock.release()
-		operationLock = nil
+		return Error("write_failed", "服务器内部错误", 500)
 	}
 
 	if !synced {

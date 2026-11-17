@@ -76,6 +76,9 @@ func (st *requestState) serveHeadless(w http.ResponseWriter) {
 		return
 	}
 	st.authCtx = result.Ctx
+	if !st.acceptAuthenticated(w) {
+		return
+	}
 
 	switch action {
 	case "create":
@@ -107,7 +110,7 @@ func (st *requestState) writeHeadlessAuthError(w http.ResponseWriter, reason str
 	case "wrong_channel":
 		writeError(w, channelHeadless, http.StatusForbidden, "forbidden_key_type", "该密钥类型不可用于此端点")
 	default:
-		writeError(w, channelHeadless, http.StatusUnauthorized, "invalid_key", "密钥失效或不正确")
+		st.writeInvalidKey(w)
 	}
 }
 

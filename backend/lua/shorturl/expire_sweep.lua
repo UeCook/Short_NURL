@@ -61,6 +61,8 @@ end
 -- @param premature  boolean  true if timer is exiting prematurely
 function M.run(premature)
     if premature then return end
+    -- Timers from old workers can briefly overlap a mode-changing reload.
+    if ngx.shared.su_meta:get("runtime_mode") == "manual" then return end
 
     local su_url = ngx.shared.su_url
     local su_exp = ngx.shared.su_exp

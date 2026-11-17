@@ -12,13 +12,14 @@ import (
 	"github.com/UeCook/Short_NURL/internal/urlguard"
 )
 
+// 自动短码排除单字符歧义 0/1/i/l/o，相邻字形另由 confusableCodePair 约束。
 const genAlphabet = "23456789abcdefghjkmnpqrstuvwxyz"
 
 // Create 执行创建短链（对齐 CreateLinkService::execute）。
 func (s *Services) Create(authCtx *auth.Context, params map[string]any) BizResponse {
 	cfg := s.Cfg
-	if cfg.QuotaTotal() > 30000 {
-		return Error("config_error", "配置的总容量超过 30000", 500)
+	if err := cfg.ValidateLinkSettings(); err != nil {
+		return Error("config_error", err.Error(), 500)
 	}
 
 	// 目标链接
@@ -120,28 +121,21 @@ func (s *Services) Create(authCtx *auth.Context, params map[string]any) BizRespo
 	var operationLock *opLock
 	var urlLock *opLock
 
+	defer func() {
+		// 即使热存储清理发生 panic，也要释放本地操作锁。
+		defer urlLock.release()
+		defer operationLock.release()
+		if mutationStarted {
+			s.Hot.EndMutation(code)
+		}
+	}()
+
 	// 仅「永久 + 自动短码」持有 URL 操作锁
 	if !isTemp && !isCustom {
 		urlLock = acquireOpLock(s.Perm.Path(), "url:"+urlStr)
 		if urlLock == nil {
 			return Error("operation_in_progress", "该目标链接正在创建，请稍后重试", 409)
 		}
-	}
-
-	fail := func(resp BizResponse) BizResponse {
-		if mutationStarted {
-			s.Hot.EndMutation(code)
-			mutationStarted = false
-		}
-		if operationLock != nil {
-			operationLock.release()
-			operationLock = nil
-		}
-		if urlLock != nil {
-			urlLock.release()
-			urlLock = nil
-		}
-		return resp
 	}
 
 	// ── 阶段 1：双 Store 锁内只做选择与校验，不写入 ──────────────
@@ -222,16 +216,16 @@ func (s *Services) Create(authCtx *auth.Context, params map[string]any) BizRespo
 		return &store.TxResult{Write: []string{}, Result: false}, nil
 	})
 	if err != nil {
-		return fail(Error("write_failed", "服务器内部错误", 500))
+		return Error("write_failed", "服务器内部错误", 500)
 	}
 	if errorResponse != nil {
-		return fail(*errorResponse)
+		return *errorResponse
 	}
 
 	// ── 阶段 2：热同步 ─────────────────────────────────────────
 	mutationStarted = s.Hot.BeginMutation(code)
 	if !mutationStarted && !cfg.Policy.ColdFallback {
-		return fail(Error("hot_store_unavailable", "热存储暂不可用，请稍后重试", 503))
+		return Error("hot_store_unavailable", "热存储暂不可用，请稍后重试", 503)
 	}
 	if !mutationStarted {
 		slog.Warn("[create] mutation 标记未确认，已启用冷存储兜底", "code", code)
@@ -254,7 +248,7 @@ func (s *Services) Create(authCtx *auth.Context, params map[string]any) BizRespo
 			}
 			s.Hot.DeleteWithRetry(code, hotType)
 		}
-		return fail(Error("hot_store_unavailable", "热存储暂不可用，请稍后重试", 503))
+		return Error("hot_store_unavailable", "热存储暂不可用，请稍后重试", 503)
 	}
 
 	// ── 阶段 3：冷提交 ─────────────────────────────────────────
@@ -286,7 +280,7 @@ func (s *Services) Create(authCtx *auth.Context, params map[string]any) BizRespo
 				}
 				s.Hot.DeleteWithRetry(code, hotType)
 			}
-			return fail(Error("write_failed", "服务器内部错误", 500))
+			return Error("write_failed", "服务器内部错误", 500)
 		}
 		if errorResponse != nil {
 			hotType := "perm"
@@ -298,20 +292,7 @@ func (s *Services) Create(authCtx *auth.Context, params map[string]any) BizRespo
 	}
 
 	if errorResponse != nil {
-		return fail(*errorResponse)
-	}
-
-	if mutationStarted {
-		s.Hot.EndMutation(code)
-		mutationStarted = false
-	}
-	if operationLock != nil {
-		operationLock.release()
-		operationLock = nil
-	}
-	if urlLock != nil {
-		urlLock.release()
-		urlLock = nil
+		return *errorResponse
 	}
 
 	if !synced {
@@ -364,10 +345,38 @@ func quotaLimit(cfg *config.Config, isServiceKey, isTemp bool) int {
 
 func randomCode(n int) string {
 	b := make([]byte, n)
+	var allowed [len(genAlphabet)]byte
 	for i := range b {
-		b[i] = genAlphabet[rand.Intn(len(genAlphabet))]
+		count := 0
+		for j := range genAlphabet {
+			c := genAlphabet[j]
+			if i > 0 && confusableCodePair(b[i-1], c) {
+				continue
+			}
+			allowed[count] = c
+			count++
+		}
+		// 直接从可用字符中选择，不占用外层的占用/保留字重试次数。
+		b[i] = allowed[rand.Intn(count)]
 	}
 	return string(b)
+}
+
+// confusableCodePair 避免连续重复字符和容易粘连误读的字形组。
+// m/n/r 可能拼成相似的竖笔画，u/v/w 可能拼成相似的谷形笔画。
+// 仅限制自动生成，不改变自定义短码和已有短链的合法性。
+func confusableCodePair(left, right byte) bool {
+	if left == right {
+		return true
+	}
+	switch left {
+	case 'm', 'n', 'r':
+		return right == 'm' || right == 'n' || right == 'r'
+	case 'u', 'v', 'w':
+		return right == 'u' || right == 'v' || right == 'w'
+	default:
+		return false
+	}
 }
 
 func validCustomCode(code string, maxLen int) bool {

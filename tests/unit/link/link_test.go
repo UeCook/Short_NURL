@@ -229,6 +229,33 @@ func TestServiceCodeLength(t *testing.T) {
 	}
 }
 
+func TestAmbiguousCustomCodesAndDedupRemainCompatible(t *testing.T) {
+	f := newFixture(t)
+	for _, code := range []string{"9vvd", "2ww3", "4rn5", "aabb", "1lio"} {
+		t.Run(code, func(t *testing.T) {
+			target := "https://example.com/legacy/" + code
+			res := f.svc.Create(f.ctx, map[string]any{"url": target, "code": code})
+			if !res.OK {
+				t.Fatalf("explicit custom code must remain usable: %+v", res)
+			}
+			shortURL := "https://s.example.com/" + code
+			if out := res.Data.(CreateOK); out.ShortURL != shortURL || out.Dedup {
+				t.Fatalf("custom code changed: %+v", out)
+			}
+			if got := f.svc.Get(f.ctx, code); !got.OK || got.Data.(GetOK).LURL != shortURL {
+				t.Fatalf("custom code lookup failed: %+v", got)
+			}
+			res = f.svc.Create(f.ctx, map[string]any{"url": target})
+			if !res.OK {
+				t.Fatalf("deduplication failed: %+v", res)
+			}
+			if out := res.Data.(CreateOK); out.ShortURL != shortURL || !out.Dedup {
+				t.Fatalf("existing code must be reused: %+v", out)
+			}
+		})
+	}
+}
+
 func TestOnetimeForbiddenForManagement(t *testing.T) {
 	f := newFixture(t)
 	results := map[string]BizResponse{

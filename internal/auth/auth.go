@@ -35,6 +35,9 @@ func (a *Auth) Authenticate(credential string, allowedTypes []string) Result {
 	if credential == "" {
 		return Result{Reason: "missing"}
 	}
+	if !validCredentialFormat(credential) {
+		return Result{Reason: "invalid"}
+	}
 	v := a.keys.Verify(credential, allowedTypes)
 	if v.OK {
 		return Result{
@@ -52,6 +55,20 @@ func (a *Auth) Authenticate(credential string, allowedTypes []string) Result {
 		reason = "invalid"
 	}
 	return Result{Reason: reason}
+}
+
+// 32 字节 Base58 Key 的编码为 32–44 位；先拒绝畸形值，避免读取/锁定 keys.json。
+func validCredentialFormat(raw string) bool {
+	if len(raw) < 35 || len(raw) > 47 || !strings.HasPrefix(raw, "su_") {
+		return false
+	}
+	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+	for _, c := range raw[3:] {
+		if !strings.ContainsRune(alphabet, c) {
+			return false
+		}
+	}
+	return true
 }
 
 // Complete 提交或释放一次性 Key 预约。

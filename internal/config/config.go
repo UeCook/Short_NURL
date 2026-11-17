@@ -16,6 +16,9 @@ import (
 	"github.com/UeCook/Short_NURL/internal/urlguard"
 )
 
+// MaxQuotaTotal 是四项短链配额的合计上限。
+const MaxQuotaTotal = 30000
+
 // Server 服务端配置。
 type Server struct {
 	Listen               string `json:"listen"`
@@ -94,6 +97,7 @@ type Config struct {
 	Codes    Codes    `json:"codes"`
 	Internal Internal `json:"internal"`
 	Policy   Policy   `json:"policy"`
+	Abuse    Abuse    `json:"abuse"`
 	Log      Log      `json:"log"`
 
 	// 解析后的绝对路径。
@@ -105,7 +109,7 @@ type Config struct {
 	ConfigDir         string `json:"-"`
 }
 
-// Default 返回内置默认值（与 v2.0.3 core/config.php 一致）。
+// Default 保留原有业务默认值，并默认开启 Go API 防刷。
 func Default() *Config {
 	return &Config{
 		Server: Server{
@@ -149,6 +153,7 @@ func Default() *Config {
 			BackoffMS:  100,
 		},
 		Policy: Policy{ColdFallback: false},
+		Abuse:  defaultAbuse(),
 		Log:    Log{Level: "info", Format: "text"},
 	}
 }
@@ -206,6 +211,12 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("site.domain 无效: %w", err)
 	}
+	if err := cfg.ValidateLinkSettings(); err != nil {
+		return nil, err
+	}
+	if err := cfg.Abuse.Validate(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 
@@ -244,7 +255,7 @@ func (c *Config) Warnings() []string {
 	if err := isoutil.NormalizeOffset(c.Site.TzOffset); err != nil {
 		out = append(out, "时区配置无效: "+err.Error())
 	}
-	if c.Quota.PermLimit+c.Quota.TempLimit+c.Quota.SvcPermLimit+c.Quota.SvcTempLimit > 30000 {
+	if c.QuotaTotal() > MaxQuotaTotal {
 		out = append(out, "配置的总容量超过 30000")
 	}
 	if !isLoopbackListen(c.Server.Listen) {
@@ -270,6 +281,17 @@ func isLoopbackListen(listen string) bool {
 // QuotaTotal 四项配额之和。
 func (c *Config) QuotaTotal() int {
 	return c.Quota.PermLimit + c.Quota.TempLimit + c.Quota.SvcPermLimit + c.Quota.SvcTempLimit
+}
+
+// ValidateLinkSettings 在启动和创建请求中使用相同的配额与短码规则。
+func (c *Config) ValidateLinkSettings() error {
+	if c.QuotaTotal() > MaxQuotaTotal {
+		return fmt.Errorf("配置的总容量超过 %d", MaxQuotaTotal)
+	}
+	if c.Codes.SvcCodeLength != 4 && c.Codes.SvcCodeLength != 5 {
+		return errors.New("codes.svc_code_length 必须为 4 或 5")
+	}
+	return nil
 }
 
 func (c *Config) resolvePaths() {
@@ -325,6 +347,11 @@ func applyEnv(c *Config) {
 			c.Policy.ColdFallback = b
 		}
 	}
+	if v, ok := os.LookupEnv("NURL_ABUSE_ENABLED"); ok && v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.Abuse.Enabled = b
+		}
+	}
 	if v, ok := os.LookupEnv("NURL_INTERNAL_TIMEOUT"); ok && v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			c.Internal.TimeoutSec = f
@@ -361,12 +388,12 @@ func CheckFileAccess(path string) bool {
 }
 
 func probeWritable(dir string) bool {
-	tmp := filepath.Join(dir, ".nurl-write-probe")
-	f, err := os.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := os.CreateTemp(dir, ".nurl-write-probe-*")
 	if err != nil {
 		return false
 	}
-	_ = f.Close()
-	_ = os.Remove(tmp)
-	return true
+	tmp := f.Name()
+	closeErr := f.Close()
+	removeErr := os.Remove(tmp)
+	return closeErr == nil && removeErr == nil
 }

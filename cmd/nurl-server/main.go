@@ -27,7 +27,7 @@ import (
 )
 
 // version 由构建脚本通过 -ldflags -X 注入。
-var version = "3.0.3_GitHub"
+var version = "3.1.1_GitHub"
 
 func main() {
 	var (
@@ -186,7 +186,8 @@ func runCheck(cfg *config.Config) int {
 	report(isoutil.NormalizeOffset(cfg.Site.TzOffset) == nil, "时区：%s", cfg.Site.TzOffset)
 	_, domainErr := config.NormalizeOrigin(cfg.Site.Domain)
 	report(domainErr == nil, "域名：%s", cfg.Site.Domain)
-	report(cfg.QuotaTotal() <= 30000, "配额合计：%d（上限 30000）", cfg.QuotaTotal())
+	report(cfg.QuotaTotal() <= config.MaxQuotaTotal, "配额合计：%d（上限 %d）", cfg.QuotaTotal(), config.MaxQuotaTotal)
+	report(cfg.Codes.SvcCodeLength == 4 || cfg.Codes.SvcCodeLength == 5, "服务自动短码长度：%d（允许 4 或 5）", cfg.Codes.SvcCodeLength)
 
 	for _, p := range []string{cfg.PermPath, cfg.TempPath, cfg.KeysPath} {
 		report(config.CheckFileAccess(p), "数据文件可读写：%s", p)

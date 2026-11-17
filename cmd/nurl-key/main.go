@@ -20,7 +20,7 @@ import (
 	"github.com/UeCook/Short_NURL/internal/httpguard"
 )
 
-var version = "3.0.3_GitHub"
+var version = "3.1.1_GitHub"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {

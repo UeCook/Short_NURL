@@ -1,5 +1,6 @@
--- init.lua - Cold start loading module
--- Loads JSON data files into lua_shared_dict on startup
+-- init.lua - Runtime mode dispatcher and managed cold start loader
+-- Manual mode delegates read-only snapshot publication to shorturl.manual.
+-- Managed mode loads JSON data files into lua_shared_dict on startup.
 -- Triggered by access_by_lua_block in site nginx config (first request per worker)
 --
 -- Architecture:
@@ -11,7 +12,7 @@
 --   2. M.init() — called from access_by_lua_block (lazy, first request per worker)
 --      Reads nginx $su_* variables, loads JSON files into shared dicts.
 --
--- NOTE: There is a brief window between flush_all and data loading completion
+-- NOTE (managed mode): There is a brief window between flush_all and data loading completion
 -- where incoming requests may get cache misses (404). This is an inherent
 -- limitation of shared dict cold start — acceptable for a personal service.
 
@@ -20,6 +21,7 @@ local time_util = require "shorturl.util.time"
 local url_util = require "shorturl.util.url"
 local expire_sweep = require "shorturl.expire_sweep"
 local su_config = require "shorturl.config"
+local runtime = require "shorturl.runtime"
 
 local M = {}
 -- Worker-local: reset on reload, unlike shared dict's persistent inited flag.
@@ -100,7 +102,7 @@ end
 --- Data loading — called from access_by_lua_block (first request per worker)
 -- Reads nginx $su_* variables, loads JSON files into shared dicts.
 -- Uses shared lock to ensure only one worker executes data loading.
-function M.init()
+local function init_managed()
     local su_meta = ngx.shared.su_meta
     local perm_path = ngx.var.su_perm_path or "/opt/shorturl/backend/data/perm.json"
     local temp_path = ngx.var.su_temp_path or "/opt/shorturl/backend/data/temp.json"
@@ -214,6 +216,24 @@ function M.init()
 
     ngx.log(ngx.NOTICE, "ShortURL: cold start complete, perm=", perm_count, " temp=", temp_count)
     return true
+end
+
+-- Manual mode never runs managed reconciliation or initializes files on disk.
+function M.init()
+    local mode = runtime.mode()
+    local ready = false
+    if mode == "manual" then
+        ngx.shared.su_meta:set("runtime_mode", "manual")
+        ready = require("shorturl.manual").init(runtime.manual_options())
+    elseif mode == "managed" then
+        ngx.shared.su_meta:set("runtime_mode", "managed")
+        ready = init_managed()
+    else
+        ngx.log(ngx.ERR, "ShortURL: invalid su_mode: ", tostring(mode))
+    end
+    ngx.ctx.su_mode = mode
+    ngx.ctx.su_ready = ready
+    return ready
 end
 
 return M

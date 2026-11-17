@@ -45,6 +45,13 @@ local function constant_time_equals(a, b)
 end
 
 function M.dispatch()
+    local runtime = require "shorturl.runtime"
+    if runtime.mode() == "manual" or ngx.shared.su_meta:get("runtime_mode") == "manual" then
+        ngx.status = 403
+        ngx.header["Content-Type"] = "application/json"
+        ngx.say('{"error":"internal API disabled in manual mode"}')
+        return ngx.exit(403)
+    end
     local expected = get_expected_token()
 
     -- fail-close：token 缺失或不可读时直接拒绝，不跳过认证

@@ -1,16 +1,20 @@
+#requires -Version 7.4
 [CmdletBinding()]
 param(
     [ValidateSet('windows-386', 'windows-amd64', 'windows-arm64', 'linux-386', 'linux-amd64', 'linux-armv7', 'linux-arm64')]
     [string[]]$Target = @('windows-386', 'windows-amd64', 'windows-arm64', 'linux-386', 'linux-amd64', 'linux-armv7', 'linux-arm64'),
     [ValidatePattern('^[0-9A-Za-z][0-9A-Za-z._-]*$')]
-    [string]$Version = '3.0.3_GitHub',
-    [string]$OutputDir = ''
+    [string]$Version = '3.1.1_GitHub',
+    [string]$OutputDir = '',
+    [string]$NfpmPath = 'nfpm',
+    [string]$Maintainer = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = [System.IO.Path]::GetFullPath($PSScriptRoot)
+$sourcePackageName = 'Short_NURL_v' + ($Version -replace '_GitHub$', '')
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
-    $OutputDir = Join-Path (Split-Path -Parent $projectRoot) ((Split-Path -Leaf $projectRoot) + '-release')
+    $OutputDir = Join-Path (Split-Path -Parent $projectRoot) ($sourcePackageName + '-release')
 }
 $outputRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDir)
 $projectPrefix = $projectRoot.TrimEnd([char[]]'\/') + [System.IO.Path]::DirectorySeparatorChar
@@ -22,9 +26,27 @@ if ($outputRoot.Equals($projectRoot, [System.StringComparison]::OrdinalIgnoreCas
 Get-Command go -ErrorAction Stop | Out-Null
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $targets = @($Target | Select-Object -Unique)
+$hasLinux = @($targets | Where-Object { $_.StartsWith('linux-') }).Count -gt 0
+$nfpmCommand = ''
+if ($hasLinux) {
+    if ([string]::IsNullOrWhiteSpace($Maintainer)) {
+        throw 'Linux packages require -Maintainer with a public maintainer name and email.'
+    }
+    $nfpmCommand = (Get-Command $NfpmPath -ErrorAction Stop).Source
+    . (Join-Path $projectRoot 'deploy/release/package-linux.ps1')
+}
+$sourcePackagePath = Join-Path $outputRoot $sourcePackageName
+$sourceZipPath = Join-Path $outputRoot "Short_NURL_v${Version}_source.zip"
+foreach ($path in @($sourcePackagePath, $sourceZipPath)) {
+    if (Test-Path -LiteralPath $path) {
+        throw "Output already exists: $path. Choose a new OutputDir to avoid overwriting a release."
+    }
+}
 foreach ($platform in $targets) {
     $packageName = "Short_NURL_v${Version}_${platform}"
-    foreach ($path in @((Join-Path $outputRoot $packageName), (Join-Path $outputRoot ($packageName + '.zip')))) {
+    $extensions = if ($platform.StartsWith('windows-')) { @('.zip') } else { @('.tar.gz', '.deb', '.rpm') }
+    $platformPaths = @((Join-Path $outputRoot $packageName)) + @($extensions | ForEach-Object { Join-Path $outputRoot ($packageName + $_) })
+    foreach ($path in $platformPaths) {
         if (Test-Path -LiteralPath $path) {
             throw "Output already exists: $path. Choose a new OutputDir to avoid overwriting a release."
         }
@@ -63,7 +85,7 @@ try {
         }
 
         # Include license notices, runtime assets, and the empty data-directory placeholder.
-        $runtimePaths = @('LICENSE.txt', 'NOTICE.txt', 'index.html', 'frontend', 'config', 'backend/lua', 'backend/data/.gitkeep', 'deploy/nginx')
+        $runtimePaths = @('LICENSE.txt', 'NOTICE.txt', 'README.md', 'BUILD.md', 'index.html', 'frontend', 'config', 'backend/lua', 'backend/data/.gitkeep', 'deploy/nginx', 'deploy/linux')
         foreach ($relativePath in $runtimePaths) {
             $source = Join-Path $projectRoot $relativePath
             $destination = Join-Path $packagePath $relativePath
@@ -71,13 +93,31 @@ try {
             Copy-Item -LiteralPath $source -Destination $destination -Recurse
         }
 
-        $zipPath = Join-Path $outputRoot ($packageName + '.zip')
-        [System.IO.Compression.ZipFile]::CreateFromDirectory(
-            $packagePath, $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $true
-        )
-        $archives += $zipPath
-        Write-Host "Created $zipPath"
+        if ($platform.StartsWith('windows-')) {
+            $zipPath = Join-Path $outputRoot ($packageName + '.zip')
+            [System.IO.Compression.ZipFile]::CreateFromDirectory(
+                $packagePath, $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $true
+            )
+            $archives += $zipPath
+            Write-Host "Created $zipPath"
+        } else {
+            $archives += New-LinuxReleasePackages -Source $packagePath -Platform $platform -Version ($Version -replace '_GitHub$', '') -Maintainer $Maintainer -NfpmCommand $nfpmCommand
+        }
     }
+
+    # Package source from an explicit allowlist; never include live data, credentials, or build caches.
+    $sourcePaths = @('.gitignore', 'BUILD.md', 'LICENSE.txt', 'NOTICE.txt', 'README.md', 'build.ps1', 'go.mod', 'index.html', 'backend/lua', 'backend/data/.gitkeep', 'cmd', 'config', 'deploy', 'frontend', 'internal', 'tests')
+    foreach ($relativePath in $sourcePaths) {
+        $source = Join-Path $projectRoot $relativePath
+        $destination = Join-Path $sourcePackagePath $relativePath
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+        Copy-Item -LiteralPath $source -Destination $destination -Recurse
+    }
+    [System.IO.Compression.ZipFile]::CreateFromDirectory(
+        $sourcePackagePath, $sourceZipPath, [System.IO.Compression.CompressionLevel]::Optimal, $true
+    )
+    $archives += $sourceZipPath
+    Write-Host "Created $sourceZipPath"
 
     $hashLines = foreach ($archive in ($archives | Sort-Object)) {
         $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()

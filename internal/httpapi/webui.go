@@ -37,6 +37,7 @@ func (st *requestState) writeCORSHeaders(w http.ResponseWriter) {
 	}
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Token")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Expose-Headers", "Retry-After")
 }
 
 // serveWebUI 处理 /api/*（对齐 api/api.php + bootstrap/webui.php）。
@@ -107,6 +108,9 @@ func (st *requestState) serveWebUI(w http.ResponseWriter) {
 		return
 	}
 	st.authCtx = result.Ctx
+	if !st.acceptAuthenticated(w) {
+		return
+	}
 
 	switch webuiActions[st.path] {
 	case "create":
@@ -129,7 +133,7 @@ func (st *requestState) writeAuthError(w http.ResponseWriter, reason string) {
 	case "wrong_channel":
 		writeError(w, channelWebUI, http.StatusForbidden, "wrong_channel", "该密钥类型不可用于此端点")
 	default:
-		writeError(w, channelWebUI, http.StatusUnauthorized, "invalid_key", "密钥失效或不正确")
+		st.writeInvalidKey(w)
 	}
 }
 

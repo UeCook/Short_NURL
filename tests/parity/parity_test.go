@@ -87,6 +87,8 @@ func TestParity(t *testing.T) {
 	}
 
 	cfg := config.Default()
+	// PHP 黄金响应仅对比旧业务契约，不包含 Go 新增的防刷策略。
+	cfg.Abuse.Enabled = false
 	cfg.Site.Domain = "https://s.example.com"
 	cfg.Site.TzOffset = "+08:00"
 	cfg.PermPath = filepath.Join(goData, "perm.json")

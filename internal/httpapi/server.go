@@ -1,6 +1,6 @@
 // Package httpapi 提供 WebUI 与 Headless 两套 HTTP 通道。
 //
-// 处理顺序、错误体与状态码严格对齐 v2.0.3 的 api/api.php 与 headless/headless.php。
+// 业务错误体延续 v2.0.3 的双通道契约，新增防刷在业务处理前拒绝超限请求。
 package httpapi
 
 import (
@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"runtime/debug"
 	"strings"
 
@@ -34,6 +35,7 @@ type Server struct {
 	Auth  *auth.Auth
 	Links *link.Services
 	Log   *slog.Logger
+	guard *apiGuard
 }
 
 // NewServer 构造 HTTP 服务。
@@ -41,7 +43,11 @@ func NewServer(cfg *config.Config, keys *apikey.KeyStore, authSvc *auth.Auth, li
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{Cfg: cfg, Keys: keys, Auth: authSvc, Links: links, Log: logger}
+	guard := newAPIGuard(cfg.Abuse)
+	if guard != nil && guard.initErr != nil {
+		logger.Error("[abuse] 防护配置无效，将拒绝业务请求", "error", guard.initErr)
+	}
+	return &Server{Cfg: cfg, Keys: keys, Auth: authSvc, Links: links, Log: logger, guard: guard}
 }
 
 // ServeHTTP 路由到双通道。
@@ -54,14 +60,29 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		path = "/"
 	}
 
+	ch := channelWebUI
 	if strings.HasPrefix(path, "/headless") {
-		st := &requestState{server: s, channel: channelHeadless, path: path, r: r}
-		defer st.recoverAs(w)
+		ch = channelHeadless
+	}
+	st := &requestState{server: s, channel: ch, path: path, r: r}
+	// 存活探测与空预检不访问业务存储，也不占用管理 API 的额度。
+	if s.guard != nil && path != "/api/ping" && r.Method != http.MethodOptions {
+		if ch == channelWebUI {
+			st.writeCORSHeaders(w)
+		}
+		ip, denial := s.guard.enter(r)
+		st.clientIP = ip
+		if denial != nil {
+			st.writeGuardDenial(w, denial)
+			return
+		}
+		defer s.guard.leave(ip)
+	}
+	defer st.recoverAs(w)
+	if ch == channelHeadless {
 		st.serveHeadless(w)
 		return
 	}
-	st := &requestState{server: s, channel: channelWebUI, path: path, r: r}
-	defer st.recoverAs(w)
 	st.serveWebUI(w)
 }
 
@@ -79,13 +100,14 @@ func setSecurityHeaders(h http.Header) {
 
 // requestState 单次请求的可变状态（认证上下文、原始 body）。
 type requestState struct {
-	server  *Server
-	channel channel
-	path    string
-	r       *http.Request
-	rawBody []byte
-	bodyOK  bool
-	authCtx *auth.Context
+	server   *Server
+	channel  channel
+	path     string
+	r        *http.Request
+	rawBody  []byte
+	bodyOK   bool
+	authCtx  *auth.Context
+	clientIP netip.Addr
 }
 
 func (st *requestState) recoverAs(w http.ResponseWriter) {

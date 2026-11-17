@@ -100,6 +100,8 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(luaSrv.Close)
 
 	cfg := config.Default()
+	// 这些测试验证原有业务契约；防刷状态机由独立测试使用默认开启配置覆盖。
+	cfg.Abuse.Enabled = false
 	cfg.Site.Domain = "https://s.example.com"
 	cfg.Site.TzOffset = "+08:00"
 	cfg.Storage.BaseDir = dir

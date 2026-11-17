@@ -45,6 +45,21 @@
   "policy": {
     "cold_fallback": false
   },
+  "abuse": {
+    "enabled": true,
+    "requests_per_minute": 30,
+    "burst": 5,
+    "global_requests_per_second": 5,
+    "global_burst": 10,
+    "max_concurrent": 8,
+    "failure_window_seconds": 300,
+    "max_auth_failures": 5,
+    "ban_seconds": 900,
+    "max_ban_seconds": 86400,
+    "history_seconds": 86400,
+    "max_clients": 10000,
+    "trusted_proxies": ["127.0.0.1/32", "::1/128"]
+  },
   "log": {
     "level": "info",
     "format": "text"

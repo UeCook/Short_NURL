@@ -332,12 +332,16 @@
       document.body.appendChild(ta);
       ta.select();
       try {
-        document.execCommand("copy");
-        showToast("已复制到剪贴板");
+        if (document.execCommand("copy")) {
+          showToast("已复制到剪贴板");
+        } else {
+          showToast("复制失败，请手动复制", "error");
+        }
       } catch (e) {
         showToast("复制失败，请手动复制", "error");
+      } finally {
+        document.body.removeChild(ta);
       }
-      document.body.removeChild(ta);
       return;
     }
     navigator.clipboard.writeText(url)
@@ -430,41 +434,30 @@
     copyText(url);
   }
 
-  // 刷新统计数据与列表：任一请求失败时整体 reject，
-  // 由调用方决定错误提示（避免"列表已刷新"与实际失败相矛盾）。
+  // 先取列表，认证成功后再取统计，避免一次错误确认并发产生两次失败计数。
+  // 任一请求失败时整体 reject，由调用方显示后端的逐级提示。
   var refreshSeq = 0;
   function refreshManageData() {
+    var seq = ++refreshSeq;
     var key = getManageKey();
     if (!key) { renderStat(null); renderList(null, null); return Promise.resolve(); }
 
-    var seq = ++refreshSeq;
-    var errorShown = false;
-    var firstError = null;
-    var promises = [];
-
-    promises.push(
-      apiGet("/stat", key)
-        .then(function (data) { if (seq === refreshSeq) renderStat(data); })
-        .catch(function (err) {
-          if (!errorShown) { errorShown = true; firstError = err; }
-          if (seq === refreshSeq) renderStat(null);
-        })
-    );
-
-    promises.push(
-      apiGet("/list", key)
-        .then(function (data) {
-          if (seq === refreshSeq) renderList(data.permanent || [], data.temporary || []);
-        })
-        .catch(function (err) {
-          if (!errorShown) { errorShown = true; firstError = err; }
-          if (seq === refreshSeq) renderList(null, null);
-        })
-    );
-
-    return Promise.all(promises).then(function () {
-      if (firstError) throw firstError;
-    });
+    var listLoaded = false;
+    return apiGet("/list", key)
+      .then(function (data) {
+        if (seq !== refreshSeq) return;
+        renderList(data.permanent || [], data.temporary || []);
+        listLoaded = true;
+        return apiGet("/stat", key)
+          .then(function (stat) { if (seq === refreshSeq) renderStat(stat); });
+      })
+      .catch(function (err) {
+        if (seq === refreshSeq) {
+          renderStat(null);
+          if (!listLoaded) renderList(null, null);
+        }
+        throw err;
+      });
   }
 
   /* ── 列表操作事件委托 ─────────────────────────────────── */
