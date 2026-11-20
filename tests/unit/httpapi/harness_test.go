@@ -26,6 +26,9 @@ type fakeLua struct {
 	mu       sync.Mutex
 	items    map[string]map[string]any
 	fail     bool
+	failSet  bool
+	onCheck  func()
+	onSet    func(code string)
 	setCalls int
 }
 
@@ -48,8 +51,15 @@ func (f *fakeLua) handler() http.Handler {
 			var p map[string]any
 			_ = json.Unmarshal(body, &p)
 			code, _ := p["code"].(string)
-			f.items[code] = p
 			f.setCalls++
+			if f.onSet != nil {
+				f.onSet(code)
+			}
+			if f.failSet {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			f.items[code] = p
 			w.Write([]byte(`{"ok":true}`))
 		case "/internal/delete":
 			var p map[string]any
@@ -58,6 +68,11 @@ func (f *fakeLua) handler() http.Handler {
 			delete(f.items, code)
 			w.Write([]byte(`{"ok":true}`))
 		case "/internal/mutation":
+			var params map[string]any
+			_ = json.Unmarshal(body, &params)
+			if params["action"] == "check" && f.onCheck != nil {
+				f.onCheck()
+			}
 			w.Write([]byte(`{"ok":true}`))
 		case "/internal/stat":
 			perm, temp := 0, 0

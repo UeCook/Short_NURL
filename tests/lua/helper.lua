@@ -2,7 +2,7 @@
 local M = {}
 
 function M.new()
-    local env = { now = 1800000000, timers = {}, logs = {}, response = {} }
+    local env = { now = 1800000000, timers = {}, initial_timers = {}, logs = {}, response = {} }
     local function dictionary()
         local dict = { values = {}, unsafe_writes = 0 }
         function dict:get(key)
@@ -52,14 +52,15 @@ function M.new()
         ctx = {}, header = {},
         var = { remote_addr = "198.51.100.1", su_mode = "managed", [1] = "abc" },
         req = { get_method = function() return env.method or "GET" end },
-        timer = { every = function(interval, callback)
+        timer = { at = function(delay, callback)
+            assert(delay == 0)
+            env.initial_timers[#env.initial_timers + 1] = callback
+            return true
+        end, every = function(interval, callback)
             if env.timer_error then return nil, "timer allocation failed" end
             env.timers[#env.timers + 1] = { interval = interval, callback = callback }
             return true
         end },
-        -- Compare contents directly in unit tests. Real MD5 is exercised by
-        -- tests/interop/openresty.test.cjs, including edits of equal byte length.
-        md5 = function(raw) return raw end,
         log = function(...)
             local fields = { ... }
             for i = 1, #fields do fields[i] = tostring(fields[i]) end

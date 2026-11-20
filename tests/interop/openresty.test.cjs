@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
 const http = require('node:http');
+const { once } = require('node:events');
 const { setTimeout: delay } = require('node:timers/promises');
 
 const binary = process.env.OPENRESTY_BIN;
@@ -35,7 +36,7 @@ async function until(check, message, timeout = 7000) {
   assert.fail(`${message}${last ? `: ${last.message}` : ''}`);
 }
 
-async function start(mode, missing = false) {
+async function start(mode, missing = false, sweepInterval = 3600) {
   const tempRoot = fs.realpathSync(os.tmpdir());
   const temp = fs.mkdtempSync(path.join(tempRoot, 'short-nurl-openresty-'));
   for (const dir of ['conf', 'logs', 'data', 'lua/shorturl']) fs.mkdirSync(path.join(temp, dir), { recursive: true });
@@ -60,7 +61,10 @@ async function start(mode, missing = false) {
   }`);
   const listen = await port();
   const prefix = `${unix(temp)}/`;
-  const config = `worker_processes ${process.platform === 'win32' ? 1 : 2};
+  const workers = process.platform === 'win32' ? 1 : 2;
+  const threaded = mode === 'manual' && process.platform === 'linux';
+  const config = `worker_processes ${workers};
+${threaded ? 'thread_pool shorturl_manual threads=1 max_queue=16;' : ''}
 error_log logs/error.log notice;
 pid logs/nginx.pid;
 events { worker_connections 1024; }
@@ -73,6 +77,13 @@ http {
   lua_shared_dict su_url 1m;
   lua_shared_dict su_exp 1m;
   lua_shared_dict su_blocklist 1m;
+  ${mode === 'manual' ? `init_worker_by_lua_block {
+    local options = require("shorturl.runtime").manual_options()
+    options.perm_path = "${unix(permPath)}"
+    options.temp_path = "${unix(tempPath)}"
+    ${threaded ? 'options.thread_pool = "shorturl_manual"' : ''}
+    require("shorturl.manual").start(options)
+  }` : ''}
   limit_req_zone $binary_remote_addr zone=redirect_burst:1m rate=2r/s;
   server {
     listen 127.0.0.1:${listen};
@@ -85,7 +96,7 @@ http {
     set $su_temp_path "${unix(tempPath)}";
     set $su_internal_token_path "${unix(temp)}/data/token";
     set $su_tz_offset "+08:00";
-    set $su_expire_interval 3600;
+    set $su_expire_interval ${sweepInterval};
     set $su_reload_interval 0.1;
     set $su_redirect_code 302;
     access_by_lua_block { require("shorturl.init").init() }
@@ -147,22 +158,26 @@ http {
       return [200, 503].includes((await request('/healthz')).status);
     }, 'OpenResty did not start');
   } catch (error) { await close(); throw error; }
-  return { temp, prefix, permPath, tempPath, perm, temporary, write, request, log, run, close };
+  return { temp, prefix, permPath, tempPath, perm, temporary, write, request, log, run, close, workers };
 }
 
 test('shipped manual configuration and managed Nginx examples pass nginx -t', {
   skip: !binary && 'Set OPENRESTY_BIN to an OpenResty nginx executable',
-}, () => {
+}, async () => {
   const tempRoot = fs.realpathSync(os.tmpdir());
   const temp = fs.mkdtempSync(path.join(tempRoot, 'short-nurl-openresty-'));
   fs.mkdirSync(path.join(temp, 'logs'));
   try {
     const replace = source => source.replaceAll('{部署目录}', unix(root)).replaceAll('{你的域名}', 'short.example.com');
-    const manual = replace(fs.readFileSync(path.join(root, 'deploy/nginx/manual.conf.example'), 'utf8'));
+    const listen = 'listen 127.0.0.1:' + await port() + ';';
+    const manualTemplate = replace(fs.readFileSync(path.join(root, 'deploy/nginx/manual.conf.example'), 'utf8'))
+      .replace('listen 80;', listen);
+    const manual = process.platform === 'linux' ? manualTemplate : manualTemplate
+      .replace(/^thread_pool .*\r?\n/m, '').replace(/^\s*options\.thread_pool = .*\r?\n/m, '\n');
     const snippets = [...fs.readFileSync(path.join(root, 'deploy/nginx/nginx.md'), 'utf8')
       .matchAll(/```nginx[^\n]*\n([\s\S]*?)```/g)].map(match => replace(match[1]));
     assert.equal(snippets.length, 2);
-    const managed = `events {}\nhttp {\n${snippets[0]}\nserver { listen 127.0.0.1:18080;\n${snippets[1]}\n}\n}`;
+    const managed = `events {}\nhttp {\n${snippets[0]}\nserver { ${listen}\n${snippets[1]}\n}\n}`;
     for (const [name, config] of [['manual', manual], ['managed', managed]]) {
       const file = path.join(temp, `${name}.conf`);
       fs.writeFileSync(file, config);
@@ -233,13 +248,19 @@ test('real OpenResty: manual publication, failure recovery, reload and scan prot
     assert.equal((await request('/abc')).headers.location, 'https://example.com/moved');
     write('perm', app.perm);
 
-    // HUP retains shared dictionaries; the new worker must re-register its timer.
+    // Observe publication through logs, without requests that could initialize new workers.
+    const reloadLog = app.log().length;
     const reloaded = app.run(['-s', 'reload']);
     assert.equal(reloaded.status, 0, reloaded.stderr);
-    await until(async () => (await request('/healthz')).status === 200, 'ready after reload');
+    if (process.platform === 'linux') {
+      await until(() => (app.log().slice(reloadLog).match(/worker process \d+ exited with code 0/g) || []).length >= app.workers,
+        'old workers exit after reload');
+    }
+    const publicationLog = app.log().length;
     app.temporary.d.abc.url = 'https://example.com/reloaded';
     write('temp', app.temporary);
-    await until(async () => (await request('/abc')).headers.location === 'https://example.com/reloaded', 'timer survives worker reload');
+    await until(() => app.log().slice(publicationLog).includes('manual snapshot published'), 'new timer publishes while idle');
+    assert.equal((await request('/abc')).headers.location, 'https://example.com/reloaded');
 
     const scanningPeer = newPeer();
     for (const [i, method] of ['GET', 'HEAD', 'GET'].entries()) {
@@ -299,6 +320,37 @@ test('real OpenResty: managed cold load and authenticated hot updates stay compa
     result = await app.request('/internal/set', { method: 'POST', body: {} });
     assert.equal(result.status, 403);
     t.diagnostic('Managed mode keeps its mutation/hot-sync path; manual polling does not overwrite hot updates.');
+  } catch (error) { t.diagnostic(app.log().slice(-14000)); throw error; }
+  finally { await app.close(); }
+});
+
+test('real OpenResty: managed sweep skips a cold transaction still holding its write lock', {
+  skip: (!binary || process.platform !== 'linux') && 'Requires OpenResty and Linux flock',
+  timeout: 25000,
+}, async t => {
+  const app = await start('managed', false, 1);
+  try {
+    assert.equal((await app.request('/healthz')).status, 200);
+    const lock = spawn('flock', ['-x', app.permPath + '.lock', 'sh', '-c',
+      'echo ready; read -r release'], { stdio: ['pipe', 'pipe', 'inherit'] });
+    const exited = once(lock, 'exit');
+    try {
+      const [ready] = await Promise.race([
+        once(lock.stdout, 'data'),
+        exited.then(([code]) => { throw new Error(`flock exited before locking: ${code}`); }),
+      ]);
+      assert.equal(ready.toString().trim(), 'ready');
+      app.write('perm', envelope({ ...app.perm.d, next: { url: 'https://example.com/committed' } }));
+      await delay(2300); // At least one sweep has run while the writer still holds the lock.
+      assert.equal((await app.request('/next')).status, 404);
+    } finally {
+      lock.stdin.end('release\n');
+      await exited;
+    }
+    await until(async () => {
+      const result = await app.request('/next');
+      return result.status === 302 && result.headers.location === 'https://example.com/committed';
+    }, 'the committed redirect did not become visible');
   } catch (error) { t.diagnostic(app.log().slice(-14000)); throw error; }
   finally { await app.close(); }
 });

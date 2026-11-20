@@ -13,6 +13,7 @@ for (const file of ['urlguard_test.lua', 'mutation_test.lua', 'manual_test.lua',
     const tempRoot = fs.realpathSync(os.tmpdir());
     const temp = fs.mkdtempSync(path.join(tempRoot, 'short-nurl-lua-'));
     try {
+      if (file === 'manual_test.lua') fs.mkdirSync(path.join(temp, 'hashv'));
       const result = spawnSync(binary, [path.join('tests/lua', file)], {
         cwd: root, encoding: 'utf8', timeout: 30000, windowsHide: true,
         env: { ...process.env, NURL_LUA_TEST_TMP: temp },

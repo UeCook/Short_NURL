@@ -7,6 +7,7 @@ end
 local marker_ok, marker_ttl, marker_key, response
 ngx = {
     ERR = "error",
+    header = {},
     req = {
         read_body = function() end,
         get_body_data = function() return "{}" end,
@@ -25,6 +26,9 @@ ngx = {
     exit = function(status) return status end,
 }
 local handler = require "shorturl.internal_mutation"
+params = { action = "check" }
+assert(handler.handle() == 200)
+assert(marker_key == nil)
 for _, action in ipairs({"begin", "end"}) do
     for _, succeeds in ipairs({true, false}) do
         params = { code = "abc", action = action }
