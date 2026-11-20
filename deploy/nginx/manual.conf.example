@@ -1,0 +1,71 @@
+# Linux OpenResty 手工模式配置。请替换 {部署目录} 和 server_name，按需配置 HTTPS。
+worker_processes auto;
+error_log logs/error.log notice;
+pid logs/nginx.pid;
+thread_pool shorturl_manual threads=1 max_queue=16;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    lua_package_path "{部署目录}/backend/lua/?.lua;;";
+    # 同时预留当前代、候选代、索引和共享内存分配开销。
+    lua_shared_dict su_manual 160m;
+    lua_shared_dict su_meta 1m;
+    lua_shared_dict su_blocklist 4m;
+    limit_req_zone $binary_remote_addr zone=redirect_burst:10m rate=2r/s;
+
+    init_worker_by_lua_block {
+        local options = require("shorturl.runtime").manual_options()
+        options.perm_path = "{部署目录}/backend/data/perm.json"
+        options.temp_path = "{部署目录}/backend/data/temp.json"
+        options.thread_pool = "shorturl_manual"
+        require("shorturl.manual").start(options)
+    }
+
+    server {
+        listen 80;
+        server_name short.example.com;
+        set $su_mode "manual";
+        set $su_redirect_code 302;
+
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+
+        access_by_lua_block {
+            require("shorturl.init").init()
+        }
+
+        location = /healthz {
+            limit_except GET { deny all; }
+            content_by_lua_block {
+                ngx.header["Content-Type"] = "application/json"
+                ngx.header["Cache-Control"] = "no-store"
+                if ngx.ctx.su_ready then
+                    ngx.say('{"ok":true}')
+                else
+                    ngx.status = 503
+                    ngx.header["Retry-After"] = "1"
+                    ngx.say('{"ok":false}')
+                end
+            }
+        }
+
+        location ^~ /api/ { return 404; }
+        location ^~ /headless/ { return 404; }
+        location ^~ /internal/ { return 404; }
+
+        location ~* "^/([0-9a-z-]{1,5})$" {
+            limit_req zone=redirect_burst burst=10 nodelay;
+            limit_req_status 429;
+            limit_except GET { deny all; }
+            content_by_lua_block {
+                require("shorturl.redirect").go()
+            }
+        }
+
+        # 此站点仅提供跳转和健康检查，数据与源码目录均不对外开放。
+        location / { return 404; }
+    }
+}

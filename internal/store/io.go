@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -98,19 +99,19 @@ func decodeDataField(raw json.RawMessage) (Data, error) {
 // WriteFileAtomic 是单文件安全写入入口；调用方负责持有该文件的操作锁。
 // mode 为 0 时保留权限；verifyJSON 为 true 时拒绝非法或 null JSON。
 func WriteFileAtomic(path string, payload []byte, mode os.FileMode, verifyJSON bool) error {
-	return writeFilesAtomic([]fileWrite{{path: path, payload: payload, mode: mode, verifyJSON: verifyJSON}})
+	return writeFilesAtomic(context.Background(), []fileWrite{{path: path, payload: payload, mode: mode, verifyJSON: verifyJSON}})
 }
 
-func writeFilesAtomic(writes []fileWrite) error {
-	prepared, err := prepareWrites(writes)
+func writeFilesAtomic(ctx context.Context, writes []fileWrite) error {
+	prepared, err := prepareWrites(ctx, writes)
 	if err != nil {
 		return err
 	}
-	return commitWrites(prepared)
+	return commitWrites(ctx, prepared)
 }
 
 // prepareWrites 在替换任何目标前完成快照、备份和临时文件的落盘。
-func prepareWrites(writes []fileWrite) (prepared []pending, err error) {
+func prepareWrites(ctx context.Context, writes []fileWrite) (prepared []pending, err error) {
 	defer func() {
 		if err != nil {
 			cleanupPrepared(prepared)
@@ -118,6 +119,9 @@ func prepareWrites(writes []fileWrite) (prepared []pending, err error) {
 	}()
 	seen := make(map[string]bool, len(writes))
 	for _, write := range writes {
+		if err := ctx.Err(); err != nil {
+			return prepared, err
+		}
 		if seen[write.path] {
 			return prepared, fmt.Errorf("重复的写入路径: %s", write.path)
 		}
@@ -148,10 +152,16 @@ func prepareWrites(writes []fileWrite) (prepared []pending, err error) {
 			if err != nil {
 				return prepared, err
 			}
-			if err := renameTemp(backupTmp, p.path+".bak"); err != nil {
+			if err := renameTemp(ctx, backupTmp, p.path+".bak"); err != nil {
 				_ = os.Remove(backupTmp)
 				return prepared, fmt.Errorf("备份失败: %w", err)
 			}
+			if err := syncParent(p.path); err != nil {
+				return prepared, fmt.Errorf("同步备份目录失败: %w", err)
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return prepared, err
 		}
 		p.tmp, err = writeTempFile(p.path, p.payload, p.mode)
 		if err != nil {
@@ -164,18 +174,26 @@ func prepareWrites(writes []fileWrite) (prepared []pending, err error) {
 
 // commitWrites 依次替换并回读，任一步失败都恢复本次已提交文件。
 // 多文件替换之间有可见窗口，此处保证的是同步错误回滚。
-func commitWrites(prepared []pending) error {
+func commitWrites(ctx context.Context, prepared []pending) error {
 	defer cleanupPrepared(prepared)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for i, p := range prepared {
-		if err := renameTemp(p.tmp, p.path); err != nil {
+		if err := renameTemp(ctx, p.tmp, p.path); err != nil {
 			return errors.Join(err, rollbackWrites(prepared[:i]))
 		}
+		// 首次替换之后，完成提交或回滚，避免取消留下只提交了一半的事务。
+		ctx = context.Background()
 		raw, err := os.ReadFile(p.path)
 		if err == nil && !bytes.Equal(raw, p.payload) {
 			err = errors.New("回读内容与写入内容不一致")
 		}
 		if err != nil {
 			return errors.Join(fmt.Errorf("写入验证失败: %s: %w", p.path, err), rollbackWrites(prepared[:i+1]))
+		}
+		if err := syncParent(p.path); err != nil {
+			return errors.Join(fmt.Errorf("同步数据目录失败: %s: %w", p.path, err), rollbackWrites(prepared[:i+1]))
 		}
 	}
 	return nil
@@ -195,9 +213,12 @@ func rollbackWrites(committed []pending) error {
 			var tmp string
 			tmp, err = writeTempFile(p.path, p.before, p.originalMode)
 			if err == nil {
-				err = renameTemp(tmp, p.path)
+				err = renameTemp(context.Background(), tmp, p.path)
 				_ = os.Remove(tmp)
 			}
+		}
+		if err == nil {
+			err = syncParent(p.path)
 		}
 		if err != nil {
 			failures = append(failures, fmt.Errorf("回滚失败: %s: %w", p.path, err))
@@ -212,13 +233,24 @@ func cleanupPrepared(prepared []pending) {
 	}
 }
 
-// writeTempFile 使用同目录唯一临时文件，设置权限并 fsync 后再交给提交阶段。
+// writeTempFile 在调用方持有目标写锁时使用固定的同目录临时名。
+// 进程退出后，下一次写入会清理该目标遗留的临时文件。
 func writeTempFile(path string, payload []byte, mode os.FileMode) (string, error) {
-	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".go.tmp-*")
+	tmp := path + ".go.tmp-pending"
+	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	f, err := os.OpenFile(tmp, flags, 0o600)
+	if os.IsExist(err) {
+		info, statErr := os.Lstat(tmp)
+		if statErr == nil && info.Mode().IsRegular() {
+			if removeErr := os.Remove(tmp); removeErr != nil {
+				return "", fmt.Errorf("无法清理遗留临时文件: %w", removeErr)
+			}
+			f, err = os.OpenFile(tmp, flags, 0o600)
+		}
+	}
 	if err != nil {
 		return "", fmt.Errorf("创建临时文件失败: %w", err)
 	}
-	tmp := f.Name()
 	if _, err = f.Write(payload); err == nil {
 		err = f.Chmod(mode)
 	}
@@ -233,14 +265,26 @@ func writeTempFile(path string, payload []byte, mode os.FileMode) (string, error
 	return tmp, nil
 }
 
-// renameTemp 原子替换；Windows 上共享读句柄可能暂时阻止替换，做有限重试。
-func renameTemp(tmp, path string) error {
+// renameTemp 仅重试操作系统报告的暂时性共享冲突。
+func renameTemp(ctx context.Context, tmp, path string) error {
 	var err error
 	for i := 0; i < 20; i++ {
-		if err = os.Rename(tmp, path); err == nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err = replaceFile(tmp, path); err == nil {
 			return nil
 		}
-		time.Sleep(time.Millisecond)
+		if !retryReplace(err) || i == 19 {
+			break
+		}
+		timer := time.NewTimer(time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 	return fmt.Errorf("rename 失败: %s → %s: %w", tmp, path, err)
 }

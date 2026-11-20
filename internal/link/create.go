@@ -1,12 +1,15 @@
 package link
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"math/rand"
 	"time"
 
 	"github.com/UeCook/Short_NURL/internal/auth"
 	"github.com/UeCook/Short_NURL/internal/config"
+	"github.com/UeCook/Short_NURL/internal/fslock"
 	"github.com/UeCook/Short_NURL/internal/isoutil"
 	"github.com/UeCook/Short_NURL/internal/store"
 	"github.com/UeCook/Short_NURL/internal/urlguard"
@@ -17,6 +20,13 @@ const genAlphabet = "23456789abcdefghjkmnpqrstuvwxyz"
 
 // Create 执行创建短链（对齐 CreateLinkService::execute）。
 func (s *Services) Create(authCtx *auth.Context, params map[string]any) BizResponse {
+	return s.CreateContext(context.Background(), authCtx, params)
+}
+
+// CreateContext 允许请求取消等待或中止尚未提交的创建。
+func (s *Services) CreateContext(ctx context.Context, authCtx *auth.Context, params map[string]any) BizResponse {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	cfg := s.Cfg
 	if err := cfg.ValidateLinkSettings(); err != nil {
 		return Error("config_error", err.Error(), 500)
@@ -87,235 +97,161 @@ func (s *Services) Create(authCtx *auth.Context, params map[string]any) BizRespo
 		}
 	}
 
-	now := time.Now().Unix()
-	domain := cfg.Site.Domain
-	tz := cfg.Site.TzOffset
-	expStr := "0"
-	if isTemp {
-		formatted, err := isoutil.Format(now+ttl, tz)
-		if err != nil {
-			slog.Error("[create] 时区配置无效", "err", err)
-			return Error("config_error", "时区配置无效", 500)
-		}
-		expStr = formatted
-	}
-	shortURL := domain + "/" + code
-	entry := map[string]any{"id": code, "url": urlStr, "lurl": shortURL}
-	if isTemp {
-		entry["t"] = expStr
-	}
-
-	targetStore, otherStore := s.Perm, s.Temp
-	if isTemp {
-		targetStore, otherStore = s.Temp, s.Perm
-	}
-	storePath := targetStore.Path()
-	otherPath := otherStore.Path()
-
-	var errorResponse *BizResponse
-	var dedupEntry map[string]any
-	var dedupCode string
-	synced := false
-	hotWriteAttempted := false
-	mutationStarted := false
-	var operationLock *opLock
-	var urlLock *opLock
-
+	// 冷库是创建的提交点。热存储检查和发布都在双库锁之外。
+	var urlLock, codeLock *opLock
 	defer func() {
-		// 即使热存储清理发生 panic，也要释放本地操作锁。
-		defer urlLock.release()
-		defer operationLock.release()
-		if mutationStarted {
-			s.Hot.EndMutation(code)
-		}
+		codeLock.release()
+		urlLock.release()
 	}()
-
-	// 仅「永久 + 自动短码」持有 URL 操作锁
 	if !isTemp && !isCustom {
-		urlLock = acquireOpLock(s.Perm.Path(), "url:"+urlStr)
-		if urlLock == nil {
-			return Error("operation_in_progress", "该目标链接正在创建，请稍后重试", 409)
+		var err error
+		urlLock, err = acquireOpLock(cfg.PermPath, "url:"+urlStr)
+		if err != nil {
+			return lockFailure(err)
 		}
 	}
 
-	// ── 阶段 1：双 Store 锁内只做选择与校验，不写入 ──────────────
-	_, err := store.WithBothLocks(s.Perm, s.Temp, func(all map[string]store.Data) (*store.TxResult, error) {
-		data := all[storePath]
-		other := all[otherPath]
+	hotReady := true
+	if !cfg.Policy.ColdFallback {
+		hotReady = s.Hot.CheckCreate(ctx) == nil
+	}
 
-		if isTemp {
-			store.CleanExpired(data)
-		}
+	target, other := s.Perm, s.Temp
+	if isTemp {
+		target, other = s.Temp, s.Perm
+	}
+	var rejected BizResponse
+	var dedupEntry map[string]any
+	var expiresAt int64
+	expStr := "0"
+	waitCtx, cancelWait := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelWait()
+	_, err := store.WithBothLocksContext(ctx, waitCtx, s.Perm, s.Temp, func(all map[string]store.Data) (*store.TxResult, error) {
+		data, otherData := all[target.Path()], all[other.Path()]
+		readOnly := &store.TxResult{}
 
 		if !isTemp && !isCustom {
-			for _, existingCode := range store.SortedCodes(data) {
-				existing, ok := data.Entry(existingCode)
-				if !ok {
+			// 同 URL 的历史记录可能有多个短码，沿用字典序最小的结果。
+			for existingCode := range data {
+				if dedupEntry != nil && existingCode >= code {
 					continue
 				}
-				eu, hasURL := store.FieldString(existing, "url")
-				_, hasLURL := store.FieldString(existing, "lurl")
-				if !hasURL || !hasLURL || eu != urlStr {
-					continue
+				entry, _ := data.Entry(existingCode)
+				eu, _ := store.FieldString(entry, "url")
+				_, hasLURL := store.FieldString(entry, "lurl")
+				if hasLURL && eu == urlStr {
+					code, dedupEntry = existingCode, entry
 				}
-				code = existingCode
-				operationLock = acquireOpLock(s.Perm.Path(), "code:"+code)
-				if operationLock == nil {
-					errorResponse = ptr(Error("operation_in_progress", "该短码正在操作，请稍后重试", 409))
-					return &store.TxResult{Write: []string{}, Result: false}, nil
-				}
-				dedupCode = existingCode
-				dedupEntry = existing
-				return &store.TxResult{Write: []string{}, Result: true}, nil
 			}
 		}
 
-		if isCustom {
-			if data.Has(code) || other.Has(code) {
-				errorResponse = ptr(Error("conflict", "已占用", 409))
-			}
-		} else {
-			generated := false
-			for i := 0; i < 8; i++ {
-				candidate := randomCode(svcCodeLength)
-				if isReserved(cfg.Codes.ReservedCodes, candidate) {
-					continue
-				}
-				if data.Has(candidate) || other.Has(candidate) {
-					continue
-				}
-				code = candidate
-				generated = true
-				break
-			}
-			if !generated {
-				errorResponse = ptr(Error("gen_failed", "无法生成后缀", 500))
-			} else {
-				shortURL = domain + "/" + code
-				entry["id"] = code
-				entry["lurl"] = shortURL
-			}
-		}
-
-		if errorResponse == nil {
-			activeCount := store.CountActive(data)
-			limit := quotaLimit(cfg, isServiceKey, isTemp)
-			if activeCount >= limit {
-				errorResponse = ptr(Error("quota_exceeded", "已达上限", 429))
-			}
-		}
-
-		if errorResponse == nil {
-			operationLock = acquireOpLock(s.Perm.Path(), "code:"+code)
-			if operationLock == nil {
-				errorResponse = ptr(Error("operation_in_progress", "该短码正在操作，请稍后重试", 409))
-				return &store.TxResult{Write: []string{}, Result: false}, nil
-			}
-			return &store.TxResult{Write: []string{}, Result: true}, nil
-		}
-		return &store.TxResult{Write: []string{}, Result: false}, nil
-	})
-	if err != nil {
-		return Error("write_failed", "服务器内部错误", 500)
-	}
-	if errorResponse != nil {
-		return *errorResponse
-	}
-
-	// ── 阶段 2：热同步 ─────────────────────────────────────────
-	mutationStarted = s.Hot.BeginMutation(code)
-	if !mutationStarted && !cfg.Policy.ColdFallback {
-		return Error("hot_store_unavailable", "热存储暂不可用，请稍后重试", 503)
-	}
-	if !mutationStarted {
-		slog.Warn("[create] mutation 标记未确认，已启用冷存储兜底", "code", code)
-	}
-
-	hotWriteAttempted = dedupEntry == nil
-	remainingTtl := int64(0)
-	if isTemp {
-		remainingTtl = now + ttl - time.Now().Unix()
-		if remainingTtl < 1 {
-			remainingTtl = 1
-		}
-	}
-	synced = s.Hot.SetWithRetry(code, urlStr, int(remainingTtl), expStr)
-	if !synced && !cfg.Policy.ColdFallback {
-		if hotWriteAttempted {
-			hotType := "perm"
-			if isTemp {
-				hotType = "temp"
-			}
-			s.Hot.DeleteWithRetry(code, hotType)
-		}
-		return Error("hot_store_unavailable", "热存储暂不可用，请稍后重试", 503)
-	}
-
-	// ── 阶段 3：冷提交 ─────────────────────────────────────────
-	if dedupEntry == nil {
-		_, err = store.WithBothLocks(s.Perm, s.Temp, func(all map[string]store.Data) (*store.TxResult, error) {
-			data := all[storePath]
+		if dedupEntry == nil {
 			if isTemp {
 				store.CleanExpired(data)
 			}
-			if data.Has(code) || all[otherPath].Has(code) {
-				errorResponse = ptr(Error("conflict", "已占用", 409))
-				return &store.TxResult{Write: []string{}, Result: false}, nil
+			if isCustom && (data.Has(code) || otherData.Has(code)) {
+				rejected = Error("conflict", "已占用", 409)
+				return readOnly, nil
 			}
-			active := store.CountActive(data)
-			limit := quotaLimit(cfg, isServiceKey, isTemp)
-			if active >= limit {
-				errorResponse = ptr(Error("quota_exceeded", "已达上限", 429))
-				return &store.TxResult{Write: []string{}, Result: false}, nil
+			if store.CountActive(data) >= quotaLimit(cfg, isServiceKey, isTemp) {
+				rejected = Error("quota_exceeded", "已达上限", 429)
+				return readOnly, nil
 			}
-			data[code] = entry
-			return &store.TxResult{Write: []string{storePath}, Result: true}, nil
-		})
-		if err != nil {
-			slog.Error("[create]", "err", err)
-			if hotWriteAttempted {
-				hotType := "perm"
-				if isTemp {
-					hotType = "temp"
+		}
+
+		if !hotReady {
+			rejected = Error("hot_store_unavailable", "热存储暂不可用，请稍后重试", 503)
+			return readOnly, nil
+		}
+		if dedupEntry != nil || isCustom {
+			var lockErr error
+			codeLock, lockErr = acquireOpLock(cfg.PermPath, "code:"+code)
+			if lockErr != nil {
+				rejected = lockFailure(lockErr)
+				return readOnly, nil
+			}
+		} else {
+			for i := 0; i < 8; i++ {
+				candidate := randomCode(svcCodeLength)
+				if isReserved(cfg.Codes.ReservedCodes, candidate) || data.Has(candidate) || otherData.Has(candidate) {
+					continue
 				}
-				s.Hot.DeleteWithRetry(code, hotType)
+				var lockErr error
+				codeLock, lockErr = acquireOpLock(cfg.PermPath, "code:"+candidate)
+				if errors.Is(lockErr, fslock.ErrNotAcquired) {
+					continue
+				}
+				if lockErr != nil {
+					rejected = lockFailure(lockErr)
+					return readOnly, nil
+				}
+				code = candidate
+				break
 			}
+			if codeLock == nil {
+				rejected = Error("gen_failed", "无法生成后缀", 500)
+				return readOnly, nil
+			}
+		}
+
+		if dedupEntry != nil {
+			return readOnly, nil
+		}
+		entry := map[string]any{"id": code, "url": urlStr, "lurl": cfg.Site.Domain + "/" + code}
+		if isTemp {
+			expiresAt = time.Now().Unix() + ttl
+			formatted, formatErr := isoutil.Format(expiresAt, cfg.Site.TzOffset)
+			if formatErr != nil {
+				slog.Error("[create] 时区配置无效", "err", formatErr)
+				rejected = Error("config_error", "时区配置无效", 500)
+				return readOnly, nil
+			}
+			expStr = formatted
+			entry["t"] = expStr
+		}
+		data[code] = entry
+		return &store.TxResult{Write: []string{target.Path()}}, nil
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, context.Canceled):
+			return Error("create_cancelled", "创建请求已取消", 408)
+		case errors.Is(err, context.DeadlineExceeded):
+			if ctx.Err() == nil {
+				return Error("api_busy", "创建请求排队超时，请稍后重试", 429)
+			}
+			return Error("create_timeout", "创建请求超时，请稍后重试", 504)
+		default:
+			slog.Error("[create] 冷存储事务失败", "err", err)
 			return Error("write_failed", "服务器内部错误", 500)
 		}
-		if errorResponse != nil {
-			hotType := "perm"
-			if isTemp {
-				hotType = "temp"
-			}
-			s.Hot.DeleteWithRetry(code, hotType)
-		}
+	}
+	if rejected.Code != "" {
+		return rejected
 	}
 
-	if errorResponse != nil {
-		return *errorResponse
+	// 冷库已经提交。即使这时请求取消或 OpenResty 不可用，后台也能从冷库恢复。
+	remainingTTL := int64(0)
+	if isTemp {
+		remainingTTL = expiresAt - time.Now().Unix()
 	}
-
-	if !synced {
-		slog.Warn("[create] 冷存储记录已保留，热同步未确认，等待后台对账", "code", code)
+	synced := false
+	if !isTemp || remainingTTL > 0 {
+		synced = s.Hot.SetWithRetryContext(ctx, code, urlStr, int(remainingTTL), expStr) == nil
+	}
+	if !synced && dedupEntry != nil && !cfg.Policy.ColdFallback {
+		return Error("hot_store_unavailable", "热存储暂不可用，请稍后重试", 503)
 	}
 	var warning *string
 	if !synced {
+		slog.Warn("[create] 冷存储记录已保留，热同步未确认", "code", code)
 		w := "短链已保存到冷存储，但未确认热存储同步，可能暂时无法访问，等待后台对账恢复。"
 		warning = &w
 	}
-
-	if dedupEntry != nil && dedupCode != "" {
-		lurl, _ := store.FieldString(dedupEntry, "lurl")
-		return Success(CreateOK{
-			ShortURL:    lurl,
-			Exp:         nil,
-			Dedup:       true,
-			Synced:      synced,
-			Warning:     warning,
-			KeyConsumed: authCtx.Consumed,
-		})
+	shortURL := cfg.Site.Domain + "/" + code
+	if dedupEntry != nil {
+		shortURL, _ = store.FieldString(dedupEntry, "lurl")
 	}
-
 	var expOut *string
 	if isTemp {
 		expOut = &expStr
@@ -323,7 +259,7 @@ func (s *Services) Create(authCtx *auth.Context, params map[string]any) BizRespo
 	return Success(CreateOK{
 		ShortURL:    shortURL,
 		Exp:         expOut,
-		Dedup:       false,
+		Dedup:       dedupEntry != nil,
 		Synced:      synced,
 		Warning:     warning,
 		KeyConsumed: authCtx.Consumed,

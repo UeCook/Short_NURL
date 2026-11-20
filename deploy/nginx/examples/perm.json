@@ -1,0 +1,11 @@
+{
+    "v": 1,
+    "at": "2026-11-13T00:00:00+08:00",
+    "d": {
+        "demo": {
+            "id": "demo",
+            "url": "https://example.com",
+            "lurl": "https://short.example.com/demo"
+        }
+    }
+}

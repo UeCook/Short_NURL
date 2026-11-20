@@ -144,7 +144,7 @@ func (st *requestState) handleWebUICreate(w http.ResponseWriter, body []byte) {
 		writeError(w, channelWebUI, http.StatusBadRequest, "bad_request", "无效的请求体")
 		return
 	}
-	result := st.server.Links.Create(st.authCtx, params)
+	result := st.server.Links.CreateContext(st.r.Context(), st.authCtx, params)
 	st.respondBiz(w, channelWebUI, result)
 }
 
@@ -193,6 +193,9 @@ func (st *requestState) respondBiz(w http.ResponseWriter, ch channel, result lin
 		status := result.HTTPStatus
 		if status == 0 {
 			status = http.StatusBadRequest
+		}
+		if result.Code == "api_busy" {
+			w.Header().Set("Retry-After", "1")
 		}
 		writeError(w, ch, status, result.Code, result.Message)
 		return

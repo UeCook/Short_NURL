@@ -128,7 +128,11 @@ func (c *Client) buildHeaders(req *http.Request, contentType bool) {
 
 // Set 写入热存储。
 func (c *Client) Set(code, url string, ttl int, expStr string) (SetResult, error) {
-	return c.post("/internal/set", map[string]any{
+	return c.set(context.Background(), code, url, ttl, expStr)
+}
+
+func (c *Client) set(ctx context.Context, code, url string, ttl int, expStr string) (SetResult, error) {
+	return c.postContext(ctx, "/internal/set", map[string]any{
 		"code":    code,
 		"url":     url,
 		"ttl":     ttl,
@@ -143,14 +147,28 @@ func (c *Client) SetWithRetry(code, url string, ttl int, expStr string) bool {
 
 // SetWithRetryErr 返回当前操作的最终错误，供调用方准确记录故障。
 func (c *Client) SetWithRetryErr(code, url string, ttl int, expStr string) error {
+	return c.SetWithRetryContext(context.Background(), code, url, ttl, expStr)
+}
+
+// SetWithRetryContext 在上下文取消时停止内部请求和重试等待。
+func (c *Client) SetWithRetryContext(ctx context.Context, code, url string, ttl int, expStr string) error {
 	var lastErr error
 	for i := 0; i < c.maxRetries; i++ {
-		_, lastErr = c.Set(code, url, ttl, expStr)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, lastErr = c.set(ctx, code, url, ttl, expStr)
 		if lastErr == nil {
 			return nil
 		}
 		if i < c.maxRetries-1 {
-			time.Sleep(c.backoff * (1 << i))
+			timer := time.NewTimer(c.backoff * (1 << i))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
 		}
 	}
 	return lastErr
@@ -182,6 +200,12 @@ func (c *Client) DeleteWithRetry(code, typ string) bool {
 func (c *Client) BeginMutation(code string) bool {
 	_, err := c.post("/internal/mutation", map[string]any{"code": code, "action": "begin"})
 	return err == nil
+}
+
+// CheckCreate 检查 Lua 创建协议是否就绪，不写热记录或短码标记。
+func (c *Client) CheckCreate(ctx context.Context) error {
+	_, err := c.postContext(ctx, "/internal/mutation", map[string]any{"action": "check"})
+	return err
 }
 
 // EndMutation 将提交标记切换为宽限期；失败时记录错误，原标记仍会按 TTL 到期。
@@ -232,22 +256,24 @@ func (c *Client) Stat() (permCount, tempCount any, ok bool) {
 }
 
 func (c *Client) post(path string, params map[string]any) (SetResult, error) {
+	return c.postContext(context.Background(), path, params)
+}
+
+func (c *Client) postContext(ctx context.Context, path string, params map[string]any) (SetResult, error) {
 	c.setLastError(nil)
 	payload, err := json.Marshal(params)
 	if err != nil {
 		c.setLastError(&Error{Type: "json", Message: "内部请求编码失败"})
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.host+path, bytes.NewReader(payload))
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.host+path, bytes.NewReader(payload))
 	if err != nil {
 		c.setLastError(&Error{Type: "transport", Message: "内部请求构建失败"})
 		return nil, err
 	}
 	c.buildHeaders(req, true)
-
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-	defer cancel()
-	req = req.WithContext(ctx)
 
 	resp, err := c.http.Do(req)
 	if err != nil {

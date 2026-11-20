@@ -2,6 +2,8 @@ package store
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,7 +32,7 @@ func TestBatchRollbackUsesCurrentSnapshot(t *testing.T) {
 			if err := os.WriteFile(a+".bak", []byte(`{"stale":true}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			prepared, err := prepareWrites([]fileWrite{
+			prepared, err := prepareWrites(context.Background(), []fileWrite{
 				{path: a, payload: []byte(`{"new":1}`), verifyJSON: true},
 				{path: b, payload: []byte(`{"new":2}`), verifyJSON: true},
 			})
@@ -51,7 +53,7 @@ func TestBatchRollbackUsesCurrentSnapshot(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(b, "block"), []byte("x"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := commitWrites(prepared); err == nil || !strings.Contains(err.Error(), b) {
+			if err := commitWrites(context.Background(), prepared); err == nil || !strings.Contains(err.Error(), b) {
 				t.Fatalf("expected the second replacement to fail: %v", err)
 			}
 			if existed {
@@ -73,7 +75,7 @@ func TestReadbackFailureRollsBackAllCommittedFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	prepared, err := prepareWrites([]fileWrite{
+	prepared, err := prepareWrites(context.Background(), []fileWrite{
 		{path: a, payload: []byte(`{"after":1}`), verifyJSON: true},
 		{path: b, payload: []byte(`{"after":2}`), verifyJSON: true},
 	})
@@ -85,11 +87,36 @@ func TestReadbackFailureRollsBackAllCommittedFiles(t *testing.T) {
 	if err := os.WriteFile(prepared[1].tmp, []byte(`{"corrupted":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := commitWrites(prepared); err == nil || !strings.Contains(err.Error(), "写入验证失败") {
+	if err := commitWrites(context.Background(), prepared); err == nil || !strings.Contains(err.Error(), "写入验证失败") {
 		t.Fatalf("expected readback verification failure: %v", err)
 	}
 	assertFileBytes(t, a, before)
 	assertFileBytes(t, b, before)
+	assertNoTemps(t, dir)
+}
+
+func TestCancellationBeforeReplacementDiscardsPreparedData(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "perm.json")
+	before := []byte(`{"d":{}}`)
+	if err := os.WriteFile(path, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟上次写进程退出后遗留的临时文件。
+	if err := os.WriteFile(path+".go.tmp-pending", []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	prepared, err := prepareWrites(ctx, []fileWrite{{path: path, payload: []byte(`{"d":{"new":{}}}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := commitWrites(ctx, prepared); !errors.Is(err, context.Canceled) {
+		t.Fatalf("commit after cancel: %v", err)
+	}
+	assertFileBytes(t, path, before)
 	assertNoTemps(t, dir)
 }
 

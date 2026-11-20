@@ -8,7 +8,8 @@ import (
 )
 
 func acquire(path string, blocking bool) (Unlock, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	// 锁文件没有内容；只需读权限，便于和 OpenResty 共用。
+	f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0o644)
 	if err != nil {
 		return nil, err
 	}

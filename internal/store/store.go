@@ -6,6 +6,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -28,11 +29,11 @@ type envelope struct {
 
 // Store 单个 JSON 数据文件。
 type Store struct {
-	path        string
-	tz          string
-	operationMu sync.Mutex // 串行化同一 Store 的完整持锁操作
-	stateMu     sync.Mutex // 保护 lock，包含未持锁时的状态检查
-	lock        *locked
+	path      string
+	tz        string
+	operation chan struct{} // 串行化同一 Store 的完整持锁操作
+	stateMu   sync.Mutex    // 保护 lock，包含未持锁时的状态检查
+	lock      *locked
 }
 
 type locked struct {
@@ -41,7 +42,7 @@ type locked struct {
 
 // New 构造 Store；目录在获取写锁时创建。
 func New(path, tz string) *Store {
-	return &Store{path: path, tz: tz}
+	return &Store{path: path, tz: tz, operation: make(chan struct{}, 1)}
 }
 
 // Path 返回数据文件路径。
@@ -61,18 +62,30 @@ func (s *Store) Read() (Data, error) {
 
 // LockBegin 获取存储排他锁（阻塞）。
 func (s *Store) LockBegin() error {
-	s.operationMu.Lock()
+	return s.lockBegin(context.Background())
+}
+
+func (s *Store) lockBegin(ctx context.Context) error {
+	select {
+	case s.operation <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		<-s.operation
+		return err
+	}
 	dir := filepath.Dir(s.path)
 	if dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			s.operationMu.Unlock()
-			return fmt.Errorf("无法创建目录: %s", dir)
+			<-s.operation
+			return fmt.Errorf("无法创建目录 %s: %w", dir, err)
 		}
 	}
-	unlock, err := fslock.Acquire(s.path+".lock", true)
+	unlock, err := fslock.AcquireContext(ctx, s.path+".lock")
 	if err != nil {
-		s.operationMu.Unlock()
-		return fmt.Errorf("无法获取排他锁: %s.lock", s.path)
+		<-s.operation
+		return fmt.Errorf("无法获取排他锁 %s.lock: %w", s.path, err)
 	}
 	s.stateMu.Lock()
 	s.lock = &locked{unlock: unlock}
@@ -90,7 +103,7 @@ func (s *Store) LockEnd() error {
 		return nil
 	}
 	err := held.unlock()
-	s.operationMu.Unlock()
+	<-s.operation
 	return err
 }
 
@@ -166,6 +179,11 @@ type TxResult struct {
 // WithBothLocks 同时锁定两个 Store，按绝对路径升序加锁后执行回调。
 // 回调只声明需要写入的路径，由本函数统一提交。
 func WithBothLocks(first, second *Store, fn func(map[string]Data) (*TxResult, error)) (any, error) {
+	return WithBothLocksContext(context.Background(), context.Background(), first, second, fn)
+}
+
+// WithBothLocksContext 使用 waitCtx 等待两个锁，使用 ctx 读取、准备并提交事务。
+func WithBothLocksContext(ctx, waitCtx context.Context, first, second *Store, fn func(map[string]Data) (*TxResult, error)) (any, error) {
 	if first.path == second.path {
 		return nil, errors.New("双 Store 必须使用不同的数据路径")
 	}
@@ -173,17 +191,20 @@ func WithBothLocks(first, second *Store, fn func(map[string]Data) (*TxResult, er
 	if stores[0].path > stores[1].path {
 		stores[0], stores[1] = stores[1], stores[0]
 	}
-	if err := stores[0].LockBegin(); err != nil {
+	if err := stores[0].lockBegin(waitCtx); err != nil {
 		return nil, err
 	}
 	defer stores[0].LockEnd()
-	if err := stores[1].LockBegin(); err != nil {
+	if err := stores[1].lockBegin(waitCtx); err != nil {
 		return nil, err
 	}
 	defer stores[1].LockEnd()
 
 	data := make(map[string]Data, 2)
 	for _, st := range stores {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		d, err := st.ReadLocked()
 		if err != nil {
 			return nil, err
@@ -191,6 +212,9 @@ func WithBothLocks(first, second *Store, fn func(map[string]Data) (*TxResult, er
 		data[st.path] = d
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	res, err := fn(data)
 	if err != nil {
 		return nil, err
@@ -201,6 +225,9 @@ func WithBothLocks(first, second *Store, fn func(map[string]Data) (*TxResult, er
 
 	writes := make([]fileWrite, 0, len(res.Write))
 	for _, path := range res.Write {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var st *Store
 		switch path {
 		case stores[0].path:
@@ -214,9 +241,9 @@ func WithBothLocks(first, second *Store, fn func(map[string]Data) (*TxResult, er
 		if ferr != nil {
 			return nil, ferr
 		}
-		writes = append(writes, fileWrite{path: path, payload: payload, verifyJSON: true})
+		writes = append(writes, fileWrite{path: path, payload: payload})
 	}
-	if err := writeFilesAtomic(writes); err != nil {
+	if err := writeFilesAtomic(ctx, writes); err != nil {
 		return nil, err
 	}
 	return res.Result, nil

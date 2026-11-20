@@ -17,9 +17,8 @@ var (
 )
 
 const (
-	genericRead  = 0x80000000
-	genericWrite = 0x40000000
-	openAlways   = 4
+	genericRead = 0x80000000
+	openAlways  = 4
 )
 
 // errSharingViolation 被其他进程独占打开。
@@ -37,7 +36,7 @@ func acquire(path string, blocking bool) (Unlock, error) {
 	tryOpen := func() (syscall.Handle, error) {
 		h, _, callErr := procCreateFileW.Call(
 			uintptr(unsafe.Pointer(p)),
-			uintptr(genericRead|genericWrite),
+			uintptr(genericRead),
 			0,
 			0,
 			uintptr(openAlways),

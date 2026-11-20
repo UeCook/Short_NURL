@@ -121,7 +121,7 @@ func (st *requestState) handleHeadlessCreate(w http.ResponseWriter, body []byte)
 		writeError(w, channelHeadless, http.StatusBadRequest, "bad_request", "无效的请求体")
 		return
 	}
-	st.respondBiz(w, channelHeadless, st.server.Links.Create(st.authCtx, params))
+	st.respondBiz(w, channelHeadless, st.server.Links.CreateContext(st.r.Context(), st.authCtx, params))
 }
 
 func (st *requestState) handleHeadlessDelete(w http.ResponseWriter, body []byte) {

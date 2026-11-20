@@ -58,9 +58,10 @@ func (s *Services) Delete(authCtx *auth.Context, code string) BizResponse {
 			return &store.TxResult{Write: []string{}, Result: false}, nil
 		}
 		deletedEntry = entry
-		operationLock = acquireOpLock(s.Perm.Path(), "code:"+code)
-		if operationLock == nil {
-			errorResponse = ptr(Error("operation_in_progress", "该短码正在操作，请稍后重试", 409))
+		var lockErr error
+		operationLock, lockErr = acquireOpLock(s.Perm.Path(), "code:"+code)
+		if lockErr != nil {
+			errorResponse = ptr(lockFailure(lockErr))
 			return &store.TxResult{Write: []string{}, Result: false}, nil
 		}
 		return &store.TxResult{Write: []string{}, Result: true}, nil
