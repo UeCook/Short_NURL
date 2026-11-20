@@ -1,4 +1,4 @@
--- internal_mutation.lua - Mark a code while Go commits hot and cold storage.
+-- 删除期间保护热记录；创建仅用 check 探测热同步接口是否就绪。
 
 local cjson = require "cjson.safe"
 
@@ -27,6 +27,12 @@ function M.handle()
     local code = params.code
     local action = params.action
 
+    if action == "check" then
+        ngx.header["Content-Type"] = "application/json"
+        ngx.say('{"ok":true}')
+        return ngx.exit(200)
+    end
+
     if type(code) ~= "string" or #code < 1 or #code > 5 or not code:match("^[0-9a-z%-]+$") then
         ngx.status = 400
         ngx.header["Content-Type"] = "application/json"
@@ -41,9 +47,9 @@ function M.handle()
     end
 
     local key = "mutation:" .. code
-    -- End keeps a grace period for a sweep that captured the previous cold snapshot.
+    -- 提交结束后保留一段宽限期，让已读到旧冷存储快照的清理任务有时间收尾。
     local ttl = (action == "begin") and 120 or 60
-    -- Do not evict other in-flight mutation markers to make room for this one.
+    -- 写入新标记时保留其他尚在提交中的短码标记。
     local ok, err = ngx.shared.su_meta:safe_set(key, 1, ttl)
     if not ok then
         ngx.log(ngx.ERR, "ShortURL: mutation marker failed code=", code, " err=", tostring(err))

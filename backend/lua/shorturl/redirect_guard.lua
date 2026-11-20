@@ -1,5 +1,5 @@
--- Bounded, cross-worker redirect protection. No authentication or disk I/O.
--- Global admission runs before lookup, including hits, to cap distributed scans.
+-- 在共享字典中控制短链访问，各工作进程共用额度。
+-- 查短码前先检查全局额度，所有跳转请求均计入限额，以约束分布式扫描。
 local config = require "shorturl.config"
 local M = {}
 local last_error = -math.huge
@@ -28,7 +28,7 @@ end
 local function increment(dict, key, ttl)
     local added, err = dict:safe_add(key, 0, ttl)
     if not added and err ~= "exists" then return nil, err end
-    -- No init parameter: allocation must go through safe_add, never LRU eviction.
+    -- 不传 incr 的初始值参数，改用 safe_add 创建计数，避免触发 LRU 淘汰。
     return dict:incr(key, 1)
 end
 
@@ -43,7 +43,7 @@ function M.before()
     if not cfg.enabled then return true end
     local dict = ngx.shared.su_blocklist
     if not dict then return unavailable("lua_shared_dict su_blocklist is missing") end
-    -- Trust only Nginx's resolved peer address, never caller-supplied headers.
+    -- 以 Nginx 解析出的客户端地址为准，调用方传入的请求头不直接参与判断。
     local ip = ngx.var.remote_addr
     if type(ip) ~= "string" or ip == "" then return unavailable("remote address missing") end
     local ban = dict:get("scan:b:" .. ip)
@@ -69,7 +69,7 @@ function M.miss()
     local count, err = increment(dict, "scan:m:" .. ip, cfg.miss_window_seconds)
     if not count then return unavailable(err) end
     if count >= cfg.max_misses then
-        -- Do not refresh a ban when concurrent misses arrive or a client retries.
+        -- 并发未命中或客户端重试时，保留既有封禁的到期时间。
         local added, ban_err = dict:safe_add("scan:b:" .. ip,
             ngx.time() + cfg.ban_seconds, cfg.ban_seconds)
         if not added and ban_err ~= "exists" then return unavailable(ban_err) end

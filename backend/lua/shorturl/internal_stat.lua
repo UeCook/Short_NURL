@@ -1,10 +1,8 @@
--- internal_stat.lua - Read counts from su_meta shared dict
--- Called by Go via GET /internal/stat
+-- 从 su_meta 共享字典读取计数，由 Go 服务通过 GET /internal/stat 调用。
 --
--- Count accuracy: counts are maintained by internal_set (incr on new), internal_delete (decr),
--- and expire_sweep (reconciliation with cold storage). Expiry, eviction and
--- interrupted mutations can cause drift until a successful sweep reconciles it.
--- Cold start always rebuilds exact counts from JSON files.
+-- internal_set 在新增时递增计数，internal_delete 在删除时递减，expire_sweep 负责冷热对账。
+-- 条目过期、被淘汰或提交中断时，计数可能暂时偏离，下一轮成功对账后恢复。
+-- 冷启动会根据 JSON 文件重新统计。
 
 local cjson = require "cjson.safe"
 

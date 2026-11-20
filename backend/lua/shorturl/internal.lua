@@ -1,5 +1,4 @@
--- internal.lua - Internal API route dispatcher
--- Routes /internal/set, /internal/delete, /internal/stat to handlers
+-- 内部 API 路由分派，将 /internal/set、/internal/delete 和 /internal/stat 交给对应处理器。
 -- 应用层认证：校验 LPA-Key 请求头（token 来自 internal_token 文件，每次调用读取）
 --
 -- 注意：此前版本使用 _token_loaded 永久缓存，若首次读取时文件不存在则永久跳过
@@ -12,7 +11,7 @@ local bit = require "bit"
 --- 每次调用从文件读取预期令牌（不缓存）
 -- 内部 API 调用频率低，每次读一个小文件开销可接受。
 local function get_expected_token()
-    -- Reading an undeclared nginx variable raises instead of returning nil.
+    -- 读取未声明的 Nginx 变量会抛出错误。
     local ok, configured_path = pcall(function()
         return ngx.var.su_internal_token_path
     end)
@@ -54,7 +53,7 @@ function M.dispatch()
     end
     local expected = get_expected_token()
 
-    -- fail-close：token 缺失或不可读时直接拒绝，不跳过认证
+    -- 令牌缺失或不可读时直接拒绝请求。
     if expected == "" then
         ngx.status = 500
         ngx.header["Content-Type"] = "application/json"

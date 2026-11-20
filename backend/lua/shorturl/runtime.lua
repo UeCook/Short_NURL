@@ -1,5 +1,5 @@
--- Nginx variables are unavailable in timers and undeclared variables raise.
--- Capture request configuration before scheduling any background work.
+-- 定时器无法读取请求中的 Nginx 变量，读取未声明的变量也会抛错。
+-- 在请求阶段提取配置，供后续的后台任务使用。
 local config = require "shorturl.config"
 local M = {}
 

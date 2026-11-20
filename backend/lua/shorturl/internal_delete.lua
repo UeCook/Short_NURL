@@ -1,11 +1,8 @@
--- internal_delete.lua - Delete from hot storage (su_url + su_exp shared dicts)
--- Called by PHP via POST /internal/delete
--- Also decrements perm_count / temp_count in su_meta for accurate tracking
+-- 从 su_url 和 su_exp 共享字典删除热存储条目。
+-- Go 服务通过 POST /internal/delete 调用。处理器按条目类型更新 su_meta 中的计数。
 --
--- Type resolution priority for counter decrement:
---   1. params.type from PHP (authoritative — determined from cold storage lookup)
---   2. su_exp lookup (fallback — may be missing due to shared dict restart/eviction)
---   3. Skip decrement with warning log (both sources unavailable)
+-- 优先用 Go 从冷存储查到的类型。调用未提供类型时，通过 su_exp 推断。
+-- 两处均无类型时，跳过计数递减并记录警告。
 
 local cjson = require "cjson.safe"
 
@@ -45,10 +42,10 @@ function M.handle()
     end
 
     local code = params.code
-    local forced_type = params.type  -- "perm" or "temp" from PHP (authoritative)
+    local forced_type = params.type  -- Go 提供的类型为 "perm" 或 "temp"。
 
-    -- ── 输入验证（信任边界：PHP 是低特权调用方，Lua 侧必须独立防守）──
-    -- code：与 PHP create.php 完全对齐 ^[0-9a-z-]{1,5}$（Lua 模式无 {n,m}，展开写法）
+    -- Lua 侧独立验证内部 API 的输入。
+    -- 短码须符合 ^[0-9a-z-]{1,5}$。Lua 模式通过可选字符展开长度范围。
     if type(code) ~= "string"
        or not code:match("^[0-9a-z%-][0-9a-z%-]?[0-9a-z%-]?[0-9a-z%-]?[0-9a-z%-]?$") then
         ngx.status = 400
@@ -72,15 +69,12 @@ function M.handle()
     local su_exp = ngx.shared.su_exp
     local su_meta = ngx.shared.su_meta
 
-    -- Determine which counter to decrement using priority:
-    --   1. params.type from PHP (authoritative — determined from cold storage)
-    --   2. su_exp lookup (fallback — may be missing due to shared dict restart/eviction)
-    --   3. Skip decrement with warning log
+    -- 共享字典重建或 LRU 淘汰后，su_exp 可能缺失，因此优先采用调用方提供的类型。
     local count_key = nil
     local source = nil
 
     if forced_type then
-        -- PHP provided the type from cold storage lookup — use it directly
+        -- 直接使用 Go 从冷存储查到的类型。
         count_key = (forced_type == "perm") and "perm_count" or "temp_count"
         source = "php:" .. forced_type
     else
@@ -104,7 +98,7 @@ function M.handle()
             su_meta:set(count_key, 0)
         end
     elseif not count_key then
-        -- Both sources unavailable — cannot determine type, skip decrement
+        -- 无法判断条目类型时跳过计数递减。
         ngx.log(ngx.WARN, "ShortURL: delete - cannot determine type for code=", code,
             ", skipping count decrement (su_exp missing, no PHP type hint)")
     end

@@ -1,21 +1,23 @@
--- config.lua - Runtime configuration for Lua modules
+-- Lua 模块的运行配置。
 --
--- init.lua registers each worker's sweep timer lazily from access_by_lua_block.
--- Nginx $su_* variables are authoritative and are stored in su_meta before registration.
--- This interval is the fallback when su_meta does not contain an interval.
+-- 工作进程收到站点请求后，由 access_by_lua_block 触发清理定时器注册。
+-- 托管模式优先使用 Nginx 的 $su_expire_interval，注册前会将其存入 su_meta。
+-- su_meta 未提供有效周期时，定时器初始化会读取下方的默认值。
 --
--- Configure the deployment interval with $su_expire_interval in the site config.
+-- 部署时可通过站点配置中的 $su_expire_interval 指定清理周期。
 
 local M = {
-    -- Nginx $su_mode overrides this: "managed" (Go) or "manual" (read-only JSON).
+    -- Nginx 的 $su_mode 优先。managed 为 Go 托管模式，manual 只读 JSON。
     mode = "managed",
     expire_interval = 3600,
     manual_reload_interval = 5,
     manual_max_file_bytes = 16 * 1024 * 1024,
     manual_max_entries = 30000,
+    -- 刷新线程加载此配置，再按 hashv 中的算法文件选择摘要组合。
+    manual_load_hashes = function() return require("shorturl.hashv.init").load() end,
 
-    -- Shared by every worker, in su_blocklist. The global budget is checked
-    -- BEFORE lookup and includes valid redirects, so rotating IPs cannot bypass it.
+    -- 各工作进程通过 su_blocklist 共用限额。查找短码前先扣全局额度，
+    -- 有效跳转也计入额度，因此轮换来源 IP 无法绕过全局限额。
     redirect_guard = {
         enabled = true,
         global_requests_per_second = 100,

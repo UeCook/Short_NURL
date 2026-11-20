@@ -1,9 +1,9 @@
--- time.lua - ISO 8601 formatting and comparison utilities
+-- ISO 8601 时间格式化、解析与比较工具。
 
 local M = {}
 
---- Convert a Gregorian calendar date interpreted as UTC to Unix epoch seconds.
--- This avoids os.time(), whose interpretation depends on the host timezone/DST.
+--- 计算公历日期与 Unix 纪元起点（1970-01-01 UTC）相隔的天数。
+-- 直接按日历计算，避免 os.time() 受主机时区和夏令时影响。
 local function days_from_civil(year, month, day)
     year = year - ((month <= 2) and 1 or 0)
     local era = math.floor(year / 400)
@@ -24,7 +24,7 @@ local function days_in_month(year, month)
     return days[month]
 end
 
---- Format a unix timestamp to ISO 8601 string with timezone offset.
+--- 将 Unix 时间戳格式化为带时区偏移的 ISO 8601 字符串。
 function M.format_iso8601(ts, tz)
     tz = tz or "+08:00"
     local sign, hh, mm = tz:match("^([+-])(%d%d):(%d%d)$")
@@ -42,7 +42,7 @@ function M.now_iso8601(tz)
     return M.format_iso8601(ngx.time(), tz or "+08:00")
 end
 
---- Parse an ISO 8601 timestamp with a numeric offset into UTC epoch seconds.
+--- 将带数字时区偏移的 ISO 8601 时间解析为 Unix 时间戳，单位为秒。
 function M.parse_iso8601(s)
     if type(s) ~= "string" or s == "0" then return nil end
 

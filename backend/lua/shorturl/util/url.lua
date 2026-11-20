@@ -20,7 +20,7 @@ local FORBIDDEN = '[%z\1-\32\127"<>\\]'
 local LOCAL_SUFFIXES = { ".localhost", ".local", ".internal", ".home.arpa" }
 
 --- 从 URL 中取出小写主机名；userinfo、端口、IPv6 方括号都按 URL 语义处理。
--- @return string|nil
+-- @return string|nil 解析出的主机名。无法解析时返回 nil。
 local function host_of(raw)
     local authority = raw:match("^[%a][%w+.-]*://([^/%?#]*)")
     if not authority or authority == "" then
@@ -262,10 +262,10 @@ end
 -- 与 Go urlguard.isPrivateIP 的 IPv4 分支对齐。
 local function is_private_ipv4(a, b)
     if a == 0 or a == 10 or a == 127 then return true end
-    if a == 100 and b >= 64 and b <= 127 then return true end -- CGNAT 100.64/10
+    if a == 100 and b >= 64 and b <= 127 then return true end -- 运营商级地址转换网段 100.64/10
     if a == 169 and b == 254 then return true end             -- 链路本地
-    if a == 172 and b >= 16 and b <= 31 then return true end  -- 172.16/12
-    if a == 192 and b == 168 then return true end             -- 192.168/16
+    if a == 172 and b >= 16 and b <= 31 then return true end  -- 私有网段 172.16/12
+    if a == 192 and b == 168 then return true end             -- 私有网段 192.168/16
     if a >= 224 then return true end                          -- 组播 224/4 + 保留 240/4
     return false
 end
@@ -273,23 +273,23 @@ end
 --- IPv6 私网/保留判定（入参为 16 字节数组）。
 local function is_private_ipv6(b)
     if all_zero(b, 1, 16) then
-        return true -- ::
+        return true -- 未指定地址 ::
     end
     if b[16] == 1 and all_zero(b, 1, 15) then
-        return true -- ::1
+        return true -- 环回地址 ::1
     end
-    -- ::ffff:a.b.c.d（IPv4-mapped）
+    -- IPv4 映射地址 ::ffff:a.b.c.d
     if b[11] == 255 and b[12] == 255 and all_zero(b, 1, 10) then
         return is_private_ipv4(b[13], b[14])
     end
     if b[1] == 254 and b[2] >= 128 and b[2] <= 191 then
-        return true -- fe80::/10
+        return true -- 链路本地地址 fe80::/10
     end
     if b[1] >= 252 and b[1] <= 253 then
-        return true -- fc00::/7
+        return true -- 唯一本地地址 fc00::/7
     end
     if b[1] == 255 then
-        return true -- ff00::/8
+        return true -- 组播地址 ff00::/8
     end
     return false
 end
@@ -327,8 +327,8 @@ local function is_private_host(host)
 end
 
 --- 校验目标链接。
--- @param raw string
--- @return boolean ok, string|nil reason
+-- @param raw string 待校验的原始 URL。
+-- @return boolean 是否通过。失败时另返回原因字符串。
 function M.check(raw)
     if type(raw) ~= "string" or raw == "" then
         return false, "empty url"

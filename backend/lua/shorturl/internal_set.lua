@@ -1,7 +1,5 @@
--- internal_set.lua - Write to hot storage (su_url + su_exp shared dicts)
--- Called by PHP via POST /internal/set
--- No business logic, pure cache write
--- Also maintains perm_count / temp_count in su_meta for new entries
+-- Go 服务通过 POST /internal/set 写入 su_url 和 su_exp 共享字典。
+-- 此接口负责热存储写入，并在新增条目时更新 su_meta 内对应的计数。
 
 local cjson = require "cjson.safe"
 local time_util = require "shorturl.util.time"
@@ -47,10 +45,10 @@ function M.handle()
     local ttl = tonumber(params.ttl) or 0
     local exp_str = params.exp_str or "0"
 
-    -- ── 输入验证（信任边界：PHP 是低特权调用方，Lua 侧必须独立防守）──
-    local MAX_TTL = 365 * 24 * 3600  -- 与 PHP config ttl_max 保持一致
+    -- Lua 侧独立验证内部 API 的输入。
+    local MAX_TTL = 365 * 24 * 3600  -- 对应 Go 配置中 ttl_max 的默认上限。
 
-    -- code：与 PHP create.php 完全对齐 ^[0-9a-z-]{1,5}$（Lua 模式无 {n,m}，展开写法）
+    -- 短码须符合 ^[0-9a-z-]{1,5}$。Lua 模式通过可选字符展开长度范围。
     if type(code) ~= "string"
        or not code:match("^[0-9a-z%-][0-9a-z%-]?[0-9a-z%-]?[0-9a-z%-]?[0-9a-z%-]?$") then
         ngx.status = 400
@@ -92,7 +90,8 @@ function M.handle()
     end
 
     -- exp_str 语义校验：必须可被 time_util 解析（拒绝 2026-99-45 等）
-    if exp_str ~= "0" and not time_util.parse_iso8601(exp_str) then
+    local exp_epoch = exp_str ~= "0" and time_util.parse_iso8601(exp_str)
+    if exp_str ~= "0" and not exp_epoch then
         ngx.status = 400
         ngx.header["Content-Type"] = "application/json"
         ngx.say('{"error":"invalid exp_str"}')
@@ -108,21 +107,26 @@ function M.handle()
         ngx.exit(400)
         return
     end
+    if exp_epoch then
+        ttl = math.min(ttl, exp_epoch - ngx.time())
+        if ttl <= 0 then
+            ngx.header["Content-Type"] = "application/json"
+            ngx.say('{"error":"temporary link expired"}')
+            return ngx.exit(409)
+        end
+    end
     -- ── 验证结束 ──────────────────────────────────────────────
 
     local su_url = ngx.shared.su_url
     local su_exp = ngx.shared.su_exp
     local su_meta = ngx.shared.su_meta
 
-    -- Go holds the per-code operation lock across hot sync and cold commit.
-    -- Only a new hot entry increments the count; retries overwrite the same code.
+    -- Go 在同步热存储和提交冷存储期间持有该短码的操作锁。
+    -- 只有新增的热存储条目才增加计数。重试会覆盖同一短码。
     local is_new = (su_url:get(code) == nil)
 
-    -- Write to shared dicts
-    -- su_url uses native TTL for auto-expiry (redirect 404 on expired links)
-    -- su_exp uses TTL=0 (never auto-expire) so expire_sweep can always
-    -- find the entry and decrement temp_count reliably. Without this,
-    -- native TTL reclaims su_exp before sweep runs → count drifts.
+    -- su_url 使用共享字典的 TTL 自动过期，过期后短链返回 404。
+    -- su_exp 的 TTL 为 0，避免清理任务运行前元数据已自动过期，导致漏减 temp_count。
     -- 保存旧值用于回滚（覆盖写入时 su_exp:set 失败不能删除原有有效条目）
     local old_url = su_url:get(code)
     local old_exp = su_exp:get(code)
@@ -171,7 +175,7 @@ function M.handle()
                 " — eviction recovery will rebuild entries from cold storage")
     end
 
-    -- Update counts for new entries only (overwrites don't change total count)
+    -- 仅在新增条目时更新计数。
     if is_new then
         local count_key = (ttl == 0) and "perm_count" or "temp_count"
         local new_val, err = su_meta:incr(count_key, 1, 0)

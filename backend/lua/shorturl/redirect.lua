@@ -1,7 +1,5 @@
--- redirect.lua - Short URL redirect handler
--- Looks up short code in managed hot storage or a manual snapshot and redirects.
--- Read path: no disk I/O, pure memory lookup
--- Redirect code (301/302) configurable via nginx $su_redirect_code (default 302)
+-- 短链跳转处理器，从托管模式的热存储或手工模式的快照查找短码。
+-- 查找只访问内存。Nginx 的 $su_redirect_code 支持 301、302、303、307、308，默认 302。
 
 local url_util = require "shorturl.util.url"
 local runtime = require "shorturl.runtime"
@@ -50,7 +48,7 @@ function M.go()
     if not ok then
         ngx.log(ngx.ERR, "ShortURL: blocked invalid redirect target for code=", code,
                 " reason=", tostring(reason))
-        -- Storage corruption is not a visitor's scanning attempt.
+        -- 热存储中的无效条目属于数据异常，应与访问者的扫描行为区分。
         return guard.reject(503, 1)
     end
 
