@@ -1,0 +1,16 @@
+{
+    "v": 1,
+    "at": "2026-10-24T12:00:00+08:00",
+    "d": {
+        "abc1": {
+            "id": "abc1",
+            "url": "https://example.com/path?a=1",
+            "lurl": "https://s.example.com/abc1"
+        },
+        "中文": {
+            "id": "中文",
+            "url": "https://example.org/中文路径",
+            "lurl": "https://s.example.com/中文"
+        }
+    }
+}
