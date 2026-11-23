@@ -3,6 +3,7 @@ package apikey
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -116,6 +117,11 @@ func randomHex(n int) (string, error) {
 
 // Verify 校验原始 Key，并在同一把锁内完成类型检查与一次性预约。
 func (k *KeyStore) Verify(rawKey string, allowedTypes []string) VerifyResult {
+	return k.VerifyContext(context.Background(), rawKey, allowedTypes)
+}
+
+// VerifyContext 允许调用方取消等待密钥存储锁。
+func (k *KeyStore) VerifyContext(ctx context.Context, rawKey string, allowedTypes []string) VerifyResult {
 	if rawKey == "" {
 		return invalidResult()
 	}
@@ -125,7 +131,7 @@ func (k *KeyStore) Verify(rawKey string, allowedTypes []string) VerifyResult {
 
 	hash := hashHex(rawKey)
 
-	unlock, err := k.lock()
+	unlock, err := k.lock(ctx)
 	if err != nil {
 		return backendErrorResult()
 	}
@@ -199,11 +205,16 @@ func (k *KeyStore) Verify(rawKey string, allowedTypes []string) VerifyResult {
 
 // CompleteOnetime 完成一次性 Key 预约；success 时消费，失败时释放。
 func (k *KeyStore) CompleteOnetime(reservationToken string, success bool) bool {
+	return k.CompleteOnetimeContext(context.Background(), reservationToken, success)
+}
+
+// CompleteOnetimeContext 在给定的期限内等待密钥存储锁。
+func (k *KeyStore) CompleteOnetimeContext(ctx context.Context, reservationToken string, success bool) bool {
 	if reservationToken == "" {
 		return false
 	}
 	found := false
-	err := k.withLock(func(keys *File) error {
+	err := k.withLockContext(ctx, func(keys *File) error {
 		for _, slot := range keys.OnetimePool {
 			if slot == nil || slot.ReservationToken == nil ||
 				!constantTimeEqual(*slot.ReservationToken, reservationToken) {
@@ -436,15 +447,19 @@ func (k *KeyStore) Status() (*Status, error) {
 
 // ── 内部 ────────────────────────────────────────────────────────
 
-func (k *KeyStore) lock() (func() error, error) {
+func (k *KeyStore) lock(ctx context.Context) (fslock.Unlock, error) {
 	if err := os.MkdirAll(filepath.Dir(k.path), 0o755); err != nil {
 		return nil, err
 	}
-	return fslock.Acquire(k.path+".lock", true)
+	return fslock.AcquireContext(ctx, k.path+".lock")
 }
 
 func (k *KeyStore) withLock(fn func(*File) error) error {
-	unlock, err := k.lock()
+	return k.withLockContext(context.Background(), fn)
+}
+
+func (k *KeyStore) withLockContext(ctx context.Context, fn func(*File) error) error {
+	unlock, err := k.lock(ctx)
 	if err != nil {
 		return err
 	}

@@ -8,7 +8,7 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '../..');
 const binary = process.env.LUA_BIN;
 for (const file of ['urlguard_test.lua', 'mutation_test.lua', 'manual_test.lua',
-  'redirect_guard_test.lua', 'redirect_test.lua']) {
+  'redirect_guard_test.lua', 'redirect_test.lua', 'expire_sweep_test.lua']) {
   test(file, { skip: !binary && 'Set LUA_BIN to LuaJIT (with lua-cjson installed)' }, () => {
     const tempRoot = fs.realpathSync(os.tmpdir());
     const temp = fs.mkdtempSync(path.join(tempRoot, 'short-nurl-lua-'));

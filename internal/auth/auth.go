@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"context"
 	"strings"
 
 	"github.com/UeCook/Short_NURL/internal/apikey"
@@ -32,13 +33,18 @@ func New(keys *apikey.KeyStore) *Auth { return &Auth{keys: keys} }
 
 // Authenticate 校验凭证并返回认证结果。
 func (a *Auth) Authenticate(credential string, allowedTypes []string) Result {
+	return a.AuthenticateContext(context.Background(), credential, allowedTypes)
+}
+
+// AuthenticateContext 允许调用方取消等待密钥存储锁。
+func (a *Auth) AuthenticateContext(ctx context.Context, credential string, allowedTypes []string) Result {
 	if credential == "" {
 		return Result{Reason: "missing"}
 	}
 	if !validCredentialFormat(credential) {
 		return Result{Reason: "invalid"}
 	}
-	v := a.keys.Verify(credential, allowedTypes)
+	v := a.keys.VerifyContext(ctx, credential, allowedTypes)
 	if v.OK {
 		return Result{
 			Success: true,
@@ -71,18 +77,15 @@ func validCredentialFormat(raw string) bool {
 	return true
 }
 
-// Complete 提交或释放一次性 Key 预约。
-func (a *Auth) Complete(ctx *Context, success bool) bool {
-	if ctx == nil {
+// CompleteContext 提交或释放一次性 Key 预约，允许取消锁等待。
+func (a *Auth) CompleteContext(ctx context.Context, reservation *Context, success bool) bool {
+	if reservation == nil || reservation.KeyType != "onetime" {
 		return true
 	}
-	if ctx.KeyType != "onetime" {
-		return true
-	}
-	if ctx.ReservationToken == "" {
+	if reservation.ReservationToken == "" {
 		return false
 	}
-	return a.keys.CompleteOnetime(ctx.ReservationToken, success)
+	return a.keys.CompleteOnetimeContext(ctx, reservation.ReservationToken, success)
 }
 
 // AllowedKeyTypes 返回端点允许的密钥类型（对齐 Helpers::allowedKeyTypes）。

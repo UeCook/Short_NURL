@@ -151,6 +151,48 @@ func TestCreateColdFailureNeverPublishes(t *testing.T) {
 	}
 }
 
+func TestCommittedCreateReportsUnconfirmedKeyConsumption(t *testing.T) {
+	for _, path := range []string{"/api/create", "/headless/api/create"} {
+		t.Run(path, func(t *testing.T) {
+			h := newHarness(t)
+			backup := h.cfg.KeysPath + ".bak"
+			h.lua.mu.Lock()
+			h.lua.onSet = func(string) {
+				// The initial reservation has persisted. Fail only the completion write.
+				if err := os.Remove(backup); err != nil {
+					t.Error(err)
+					return
+				}
+				if err := os.Mkdir(backup, 0o700); err != nil {
+					t.Error(err)
+				}
+			}
+			h.lua.mu.Unlock()
+			request := h.do
+			if strings.HasPrefix(path, "/headless/") {
+				request = h.doHeadless
+			}
+			resp, raw := request(t, http.MethodPost, path, h.onetime,
+				`{"url":"https://8.8.8.8/created","code":"abcd"}`)
+			result := decodeBody(t, raw)
+			if resp.StatusCode != http.StatusOK || result["short_url"] != "https://s.example.com/abcd" ||
+				result["synced"] != true || result["key_consumed"] != false ||
+				result["key_consumption_unconfirmed"] != true ||
+				!strings.Contains(raw, "一次性密钥消费未确认") {
+				t.Fatalf("committed create: %d %s", resp.StatusCode, raw)
+			}
+			data, err := store.New(h.cfg.PermPath, h.cfg.Site.TzOffset).Read()
+			if err != nil || !data.Has("abcd") {
+				t.Fatalf("cold data: %v, %v", data, err)
+			}
+			status, err := h.keys.Status()
+			if err != nil || status.OnetimeReservedCount != 1 {
+				t.Fatalf("outstanding reservation: %+v, %v", status, err)
+			}
+		})
+	}
+}
+
 func TestOperationLockIOFailureIsNotConflict(t *testing.T) {
 	h := newHarness(t)
 	if err := os.WriteFile(filepath.Join(h.dir, ".operations"), nil, 0o600); err != nil {

@@ -40,6 +40,13 @@ function M.new()
             return expires and expires - env.now or 0
         end
         function dict:delete(key) self.values[key] = nil end
+        function dict:get_keys()
+            local keys = {}
+            for key in pairs(self.values) do
+                if self:get(key) ~= nil then keys[#keys + 1] = key end
+            end
+            return keys
+        end
         return dict
     end
     env.ngx = {

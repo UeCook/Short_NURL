@@ -4,7 +4,7 @@ param(
     [ValidateSet('windows-386', 'windows-amd64', 'windows-arm64', 'linux-386', 'linux-amd64', 'linux-armv7', 'linux-arm64')]
     [string[]]$Target = @('windows-386', 'windows-amd64', 'windows-arm64', 'linux-386', 'linux-amd64', 'linux-armv7', 'linux-arm64'),
     [ValidatePattern('^[0-9A-Za-z][0-9A-Za-z._-]*$')]
-    [string]$Version = '3.1.3_GitHub',
+    [string]$Version = '3.1.4_GitHub',
     [string]$OutputDir = '',
     [string]$NfpmPath = 'nfpm',
     [string]$Maintainer = ''

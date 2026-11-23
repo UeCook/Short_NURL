@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/UeCook/Short_NURL/internal/apikey"
 	"github.com/UeCook/Short_NURL/internal/auth"
 	"github.com/UeCook/Short_NURL/internal/config"
+	"github.com/UeCook/Short_NURL/internal/fslock"
 	"github.com/UeCook/Short_NURL/internal/hot"
 	"github.com/UeCook/Short_NURL/internal/link"
 )
@@ -203,5 +205,52 @@ func TestGuardDoesNotBlockHealthPreflightAndReleasesAfterPanic(t *testing.T) {
 	w = serveProtected(t, f.server, "/api/list", f.resident)
 	if w.Code != 500 || f.server.guard.active != 0 {
 		t.Fatalf("panic leaked concurrency slot: status=%d active=%d", w.Code, f.server.guard.active)
+	}
+}
+
+func TestCanceledAuthReleasesConcurrencySlot(t *testing.T) {
+	f := newProtectedFixture(t)
+	unlock, err := fslock.Acquire(f.server.Cfg.KeysPath+".lock", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := httptest.NewRequest(http.MethodGet, "/api/list", nil).WithContext(ctx)
+	r.RemoteAddr = "192.0.2.1:12345"
+	r.Header.Set("X-Token", f.resident)
+	finished := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		f.server.ServeHTTP(w, r)
+		finished <- w
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		f.server.guard.mu.Lock()
+		active := f.server.guard.active
+		f.server.guard.mu.Unlock()
+		if active == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("request did not enter API guard")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case w := <-finished:
+		if w.Code != http.StatusServiceUnavailable || responseFields(t, w)["code"] != "auth_unavailable" {
+			t.Fatalf("auth response: %d %s", w.Code, w.Body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled request is still waiting for the key lock")
+	}
+	if active := f.server.guard.active; active != 0 {
+		t.Fatalf("active requests = %d, want 0", active)
 	}
 }

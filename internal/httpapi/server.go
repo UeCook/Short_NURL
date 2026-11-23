@@ -5,6 +5,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"net/netip"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/UeCook/Short_NURL/internal/apikey"
 	"github.com/UeCook/Short_NURL/internal/auth"
@@ -110,15 +112,32 @@ type requestState struct {
 	clientIP netip.Addr
 }
 
+const keyLockWait = 2 * time.Second
+
+func (st *requestState) authenticate(credential string, allowed []string) auth.Result {
+	ctx, cancel := context.WithTimeout(st.r.Context(), keyLockWait)
+	defer cancel()
+	return st.server.Auth.AuthenticateContext(ctx, credential, allowed)
+}
+
+func (st *requestState) completeOnetime(success bool) bool {
+	if st.authCtx == nil || !st.authCtx.Consumed {
+		return true
+	}
+	// A disconnected client can still leave a reservation to finalize or release.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(st.r.Context()), keyLockWait)
+	defer cancel()
+	return st.server.Auth.CompleteContext(ctx, st.authCtx, success)
+}
+
 func (st *requestState) recoverAs(w http.ResponseWriter) {
 	rec := recover()
 	if rec == nil {
 		return
 	}
 	st.server.Log.Error("[http] 未处理异常", "panic", rec, "stack", string(debug.Stack()))
-	if st.authCtx != nil {
-		_ = st.server.Auth.Complete(st.authCtx, false)
-	}
+	// The cold record may already be committed. Keep any outstanding reservation
+	// unavailable so the key store can consume it when the reservation expires.
 	writeError(w, st.channel, http.StatusInternalServerError, "internal_error", "服务器内部错误")
 }
 

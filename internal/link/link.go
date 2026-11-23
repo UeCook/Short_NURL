@@ -6,10 +6,16 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/UeCook/Short_NURL/internal/config"
 	"github.com/UeCook/Short_NURL/internal/hot"
 	"github.com/UeCook/Short_NURL/internal/store"
+)
+
+const (
+	mutationTimeout = 10 * time.Second
+	coldLockWait    = 2 * time.Second
 )
 
 // Services 业务服务集合。
@@ -53,12 +59,13 @@ func Error(code, message string, status int) BizResponse {
 
 // CreateOK 创建成功响应。
 type CreateOK struct {
-	ShortURL    string  `json:"short_url"`
-	Exp         *string `json:"exp"`
-	Dedup       bool    `json:"dedup"`
-	Synced      bool    `json:"synced"`
-	Warning     *string `json:"warning"`
-	KeyConsumed bool    `json:"key_consumed"`
+	ShortURL                  string  `json:"short_url"`
+	Exp                       *string `json:"exp"`
+	Dedup                     bool    `json:"dedup"`
+	Synced                    bool    `json:"synced"`
+	Warning                   *string `json:"warning"`
+	KeyConsumed               bool    `json:"key_consumed"`
+	KeyConsumptionUnconfirmed bool    `json:"key_consumption_unconfirmed,omitempty"`
 }
 
 // DeleteOK 删除成功响应。

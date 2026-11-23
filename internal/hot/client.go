@@ -152,12 +152,19 @@ func (c *Client) SetWithRetryErr(code, url string, ttl int, expStr string) error
 
 // SetWithRetryContext 在上下文取消时停止内部请求和重试等待。
 func (c *Client) SetWithRetryContext(ctx context.Context, code, url string, ttl int, expStr string) error {
+	return c.retry(ctx, func() error {
+		_, err := c.set(ctx, code, url, ttl, expStr)
+		return err
+	})
+}
+
+func (c *Client) retry(ctx context.Context, attempt func() error) error {
 	var lastErr error
 	for i := 0; i < c.maxRetries; i++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		_, lastErr = c.set(ctx, code, url, ttl, expStr)
+		lastErr = attempt()
 		if lastErr == nil {
 			return nil
 		}
@@ -176,29 +183,33 @@ func (c *Client) SetWithRetryContext(ctx context.Context, code, url string, ttl 
 
 // Delete 删除热存储条目。
 func (c *Client) Delete(code, typ string) (SetResult, error) {
+	return c.delete(context.Background(), code, typ)
+}
+
+func (c *Client) delete(ctx context.Context, code, typ string) (SetResult, error) {
 	params := map[string]any{"code": code}
 	if typ != "" {
 		params["type"] = typ
 	}
-	return c.post("/internal/delete", params)
+	return c.postContext(ctx, "/internal/delete", params)
 }
 
-// DeleteWithRetry 带重试地删除热存储条目。
-func (c *Client) DeleteWithRetry(code, typ string) bool {
-	for i := 0; i < c.maxRetries; i++ {
-		if _, err := c.Delete(code, typ); err == nil {
-			return true
-		}
-		if i < c.maxRetries-1 {
-			time.Sleep(c.backoff * (1 << i))
-		}
-	}
-	return false
+// DeleteWithRetryContext 在上下文取消时停止请求和重试等待。
+func (c *Client) DeleteWithRetryContext(ctx context.Context, code, typ string) bool {
+	return c.retry(ctx, func() error {
+		_, err := c.delete(ctx, code, typ)
+		return err
+	}) == nil
 }
 
 // BeginMutation 标记短码进入提交阶段。
 func (c *Client) BeginMutation(code string) bool {
-	_, err := c.post("/internal/mutation", map[string]any{"code": code, "action": "begin"})
+	return c.BeginMutationContext(context.Background(), code)
+}
+
+// BeginMutationContext 标记短码进入提交阶段，允许取消内部请求。
+func (c *Client) BeginMutationContext(ctx context.Context, code string) bool {
+	_, err := c.postContext(ctx, "/internal/mutation", map[string]any{"code": code, "action": "begin"})
 	return err == nil
 }
 
@@ -208,9 +219,9 @@ func (c *Client) CheckCreate(ctx context.Context) error {
 	return err
 }
 
-// EndMutation 将提交标记切换为宽限期；失败时记录错误，原标记仍会按 TTL 到期。
-func (c *Client) EndMutation(code string) {
-	if _, err := c.post("/internal/mutation", map[string]any{"code": code, "action": "end"}); err != nil {
+// EndMutationContext 将标记切换为宽限期。发送失败时，原标记仍会按 TTL 到期。
+func (c *Client) EndMutationContext(ctx context.Context, code string) {
+	if _, err := c.postContext(ctx, "/internal/mutation", map[string]any{"code": code, "action": "end"}); err != nil {
 		slog.Warn("[hot] mutation 宽限标记未确认", "code", code, "err", err)
 	}
 }
@@ -253,10 +264,6 @@ func (c *Client) Stat() (permCount, tempCount any, ok bool) {
 		return nil, nil, false
 	}
 	return p, t, true
-}
-
-func (c *Client) post(path string, params map[string]any) (SetResult, error) {
-	return c.postContext(context.Background(), path, params)
 }
 
 func (c *Client) postContext(ctx context.Context, path string, params map[string]any) (SetResult, error) {

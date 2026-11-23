@@ -29,6 +29,7 @@ type fakeLua struct {
 	failSet  bool
 	onCheck  func()
 	onSet    func(code string)
+	onDelete func()
 	setCalls int
 }
 
@@ -66,6 +67,9 @@ func (f *fakeLua) handler() http.Handler {
 			_ = json.Unmarshal(body, &p)
 			code, _ := p["code"].(string)
 			delete(f.items, code)
+			if f.onDelete != nil {
+				f.onDelete()
+			}
 			w.Write([]byte(`{"ok":true}`))
 		case "/internal/mutation":
 			var params map[string]any

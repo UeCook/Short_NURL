@@ -70,7 +70,7 @@ func (st *requestState) serveHeadless(w http.ResponseWriter) {
 	// 认证（仅 X-Headless-Token）
 	credential := st.r.Header.Get("X-Headless-Token")
 	allowed, _ := auth.AllowedKeyTypes("headless", action)
-	result := st.server.Auth.Authenticate(credential, allowed)
+	result := st.authenticate(credential, allowed)
 	if !result.Success {
 		st.writeHeadlessAuthError(w, result.Reason, body)
 		return
@@ -143,5 +143,5 @@ func (st *requestState) handleHeadlessDelete(w http.ResponseWriter, body []byte)
 		writeError(w, channelHeadless, http.StatusBadRequest, "missing_code", "缺少短链后缀")
 		return
 	}
-	st.respondBiz(w, channelHeadless, st.server.Links.Delete(st.authCtx, code))
+	st.respondBiz(w, channelHeadless, st.server.Links.DeleteContext(st.r.Context(), st.authCtx, code))
 }

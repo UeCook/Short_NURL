@@ -340,17 +340,23 @@ test('real OpenResty: managed sweep skips a cold transaction still holding its w
         exited.then(([code]) => { throw new Error(`flock exited before locking: ${code}`); }),
       ]);
       assert.equal(ready.toString().trim(), 'ready');
-      app.write('perm', envelope({ ...app.perm.d, next: { url: 'https://example.com/committed' } }));
+      app.write('perm', envelope({
+        ...app.perm.d,
+        abc: { url: 'https://example.com/updated' },
+        next: { url: 'https://example.com/committed' },
+      }));
       await delay(2300); // At least one sweep has run while the writer still holds the lock.
       assert.equal((await app.request('/next')).status, 404);
+      assert.equal((await app.request('/abc')).headers.location, 'https://example.com/old');
     } finally {
       lock.stdin.end('release\n');
       await exited;
     }
     await until(async () => {
       const result = await app.request('/next');
-      return result.status === 302 && result.headers.location === 'https://example.com/committed';
-    }, 'the committed redirect did not become visible');
+      if (result.status !== 302 || result.headers.location !== 'https://example.com/committed') return false;
+      return (await app.request('/abc')).headers.location === 'https://example.com/updated';
+    }, 'the committed redirects did not become visible');
   } catch (error) { t.diagnostic(app.log().slice(-14000)); throw error; }
   finally { await app.close(); }
 });

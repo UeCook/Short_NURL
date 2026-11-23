@@ -102,7 +102,7 @@ func (st *requestState) serveWebUI(w http.ResponseWriter) {
 
 	credential := st.extractWebUICredential(body)
 	allowed, _ := auth.AllowedKeyTypes("webui", webuiActions[st.path])
-	result := st.server.Auth.Authenticate(credential, allowed)
+	result := st.authenticate(credential, allowed)
 	if !result.Success {
 		st.writeAuthError(w, result.Reason)
 		return
@@ -172,7 +172,7 @@ func (st *requestState) handleWebUIDelete(w http.ResponseWriter, body []byte) {
 		writeError(w, channelWebUI, http.StatusBadRequest, "invalid_code", "短链后缀格式无效")
 		return
 	}
-	result := st.server.Links.Delete(st.authCtx, code)
+	result := st.server.Links.DeleteContext(st.r.Context(), st.authCtx, code)
 	st.respondBiz(w, channelWebUI, result)
 }
 
@@ -200,19 +200,23 @@ func (st *requestState) respondBiz(w http.ResponseWriter, ch channel, result lin
 		writeError(w, ch, status, result.Code, result.Message)
 		return
 	}
-	if !st.server.Auth.Complete(st.authCtx, true) {
-		writeError(w, ch, http.StatusInternalServerError, "internal_error", "服务器内部错误")
-		return
+	if created, ok := result.Data.(link.CreateOK); ok && !st.completeOnetime(true) {
+		st.server.Log.Warn("[http] 短链已保存，一次性密钥消费未确认")
+		created.KeyConsumed = false
+		created.KeyConsumptionUnconfirmed = true
+		warning := "一次性密钥消费未确认，请勿重复使用该密钥。"
+		if created.Warning != nil {
+			warning = *created.Warning + warning
+		}
+		created.Warning = &warning
+		result.Data = created
 	}
 	writeJSON(w, http.StatusOK, result.Data)
 }
 
 // completeSilently 提交/释放一次性预约；失败仅记录（对齐 PHP 的 try/catch）。
 func (st *requestState) completeSilently(success bool) {
-	if st.authCtx == nil {
-		return
-	}
-	if !st.server.Auth.Complete(st.authCtx, success) {
+	if !st.completeOnetime(success) {
 		st.server.Log.Warn("[http] 无法完成一次性密钥状态更新")
 	}
 }

@@ -25,7 +25,7 @@ func (s *Services) Create(authCtx *auth.Context, params map[string]any) BizRespo
 
 // CreateContext 允许请求取消等待或中止尚未提交的创建。
 func (s *Services) CreateContext(ctx context.Context, authCtx *auth.Context, params map[string]any) BizResponse {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, mutationTimeout)
 	defer cancel()
 	cfg := s.Cfg
 	if err := cfg.ValidateLinkSettings(); err != nil {
@@ -124,7 +124,7 @@ func (s *Services) CreateContext(ctx context.Context, authCtx *auth.Context, par
 	var dedupEntry map[string]any
 	var expiresAt int64
 	expStr := "0"
-	waitCtx, cancelWait := context.WithTimeout(ctx, 2*time.Second)
+	waitCtx, cancelWait := context.WithTimeout(ctx, coldLockWait)
 	defer cancelWait()
 	_, err := store.WithBothLocksContext(ctx, waitCtx, s.Perm, s.Temp, func(all map[string]store.Data) (*store.TxResult, error) {
 		data, otherData := all[target.Path()], all[other.Path()]
@@ -358,5 +358,3 @@ func lower(s string) string {
 	}
 	return string(b)
 }
-
-func ptr[T any](v T) *T { return &v }
