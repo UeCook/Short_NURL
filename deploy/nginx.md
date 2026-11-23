@@ -1,7 +1,7 @@
 ## 选择运行模式
 
 - **Go 托管模式**：使用本文的配置，保留 API、内部通信和现有管理功能。
-- **纯 Lua＋JSON 手工模式**：使用 [manual.conf.example](manual.conf.example)，按 [手工运营说明](manual.md) 部署。此模式不需要 Go、WebUI、API Key 或内部令牌，Lua 只读 JSON，通过完整快照发布文件变更。
+- **纯 Lua＋JSON 手工模式**：使用`manual.conf.example`，按手工运营说明部署。此模式不需要 Go、WebUI、API Key 或内部令牌，Lua 只读 JSON，通过完整快照发布文件变更。
 
 同一组共享字典只运行一种模式。切换到手工模式前停止 Go 服务，移除管理 API 与内部服务配置；不要同时手改和通过 Go 写同一份数据。
 
@@ -110,6 +110,7 @@ Go 后端已默认开启独立的 API 防刷，下面的 Nginx 限流作为额�
         proxy_set_header X-Forwarded-Proto https; 
         proxy_set_header Connection ""; 
         proxy_connect_timeout 5s; 
+        proxy_ignore_client_abort off;
         proxy_read_timeout 15s; 
         proxy_send_timeout 15s; 
     }
@@ -127,6 +128,7 @@ Go 后端已默认开启独立的 API 防刷，下面的 Nginx 限流作为额�
         proxy_set_header X-Forwarded-Proto https; 
         proxy_set_header Connection ""; 
         proxy_connect_timeout 5s; 
+        proxy_ignore_client_abort off;
         proxy_read_timeout 15s; 
         proxy_send_timeout 15s; 
     }
