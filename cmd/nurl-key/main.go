@@ -20,7 +20,7 @@ import (
 	"github.com/UeCook/Short_NURL/internal/httpguard"
 )
 
-var version = "3.1.3_GitHub"
+var version = "3.1.4_GitHub"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -408,14 +408,12 @@ func doAdd(domain, key string, u, ttl, code, length *string, insecure bool) erro
 	if b, _ := result["dedup"].(bool); b {
 		fmt.Println("（已存在相同目标的短链，返回已有短码）")
 	}
-	if v, ok := result["synced"]; ok {
-		if b, isBool := v.(bool); isBool && !b {
-			warning := "短链已保存，但未确认热存储同步，可能暂时无法访问"
-			if s, ok := result["warning"].(string); ok && s != "" {
-				warning = s
-			}
-			fmt.Fprintln(os.Stderr, "警告："+warning)
-		}
+	warning, _ := result["warning"].(string)
+	if synced, ok := result["synced"].(bool); warning == "" && ok && !synced {
+		warning = "短链已保存，但未确认热存储同步，可能暂时无法访问"
+	}
+	if warning != "" {
+		fmt.Fprintln(os.Stderr, "警告："+warning)
 	}
 	if b, _ := result["key_consumed"].(bool); b {
 		fmt.Println("注：本次请求已消费一次性 Key，该 Key 不可再次使用。")

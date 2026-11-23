@@ -27,7 +27,7 @@ import (
 )
 
 // version 由构建脚本通过 -ldflags -X 注入。
-var version = "3.1.3_GitHub"
+var version = "3.1.4_GitHub"
 
 func main() {
 	var (

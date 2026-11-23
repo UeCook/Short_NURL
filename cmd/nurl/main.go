@@ -15,7 +15,7 @@ import (
 	"github.com/UeCook/Short_NURL/internal/store"
 )
 
-var version = "3.1.3_GitHub"
+var version = "3.1.4_GitHub"
 
 func versionBlock() string {
 	return "Short_NURL v" + version + "\n---------------------------\nGitHub：https://github.com/UeCook/Short_NURL"

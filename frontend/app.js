@@ -273,7 +273,7 @@
 
     apiPost("/create", body)
       .then(function (data) {
-        if (data.synced === false) {
+        if (data.warning || data.synced === false) {
           showToast(data.warning || "短链已保存，但未确认热存储同步，可能暂时无法访问", "error");
         } else if (data.dedup === true) {
           // 去重命中 — 复用了已有的永久短链

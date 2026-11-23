@@ -12,11 +12,6 @@ local cold_lock = require "shorturl.cold_lock"
 
 local M = {}
 
---- 到期时间小于或等于当前时间时，判定为过期。
-local function is_expired(exp_epoch, now_epoch)
-    return exp_epoch <= now_epoch
-end
-
 local function load_cold(path)
     if not path then return nil end
     local f = io.open(path, "r")
@@ -28,29 +23,12 @@ local function load_cold(path)
     return data and type(data) == "table" and type(data.d) == "table" and data.d or nil
 end
 
-local function restore_entry(su_url, su_exp, code, entry, exp_str, now_epoch)
-    if type(entry) ~= "table" or type(entry.url) ~= "string" then return false end
-    local url = entry.url
-    local url_ok, reason = url_util.check(url)
-    if not url_ok then
-        ngx.log(ngx.WARN, "ShortURL: restore_entry blocked invalid URL for code=", code,
-                " reason=", tostring(reason))
-        return false
-    end
-    local ttl = 0
-    if exp_str ~= "0" then
-        local exp_epoch = time_util.parse_iso8601(exp_str)
-        if not exp_epoch or is_expired(exp_epoch, now_epoch) then return false end
-        ttl = exp_epoch - now_epoch
-    end
-    local ok_url = su_url:set(code, url, ttl)
-    if not ok_url then return false end
-    local ok_exp = su_exp:set(code, exp_str, 0)
-    if not ok_exp then
-        su_url:delete(code)
-        return false
-    end
-    return true
+local function restore_entry(su_url, su_exp, code, url, exp, ttl)
+    local valid, reason = url_util.check(url)
+    if not valid then return nil, reason end
+    local ok, err = su_url:set(code, url, ttl)
+    if not ok then return nil, err end
+    return su_exp:set(code, exp, 0)
 end
 
 --- 执行过期清理，由 ngx.timer.every 调用。
@@ -82,77 +60,49 @@ function M.run(premature)
             error("cold storage unavailable; reconciliation aborted")
         end
 
-        -- 遍历 TTL 为 0 的 su_exp。su_url 可能已删除过期条目，冷存储仍是对账依据。
-        local keys = su_exp:get_keys(0)
-        for _, code in ipairs(keys) do
-            local exp_str = su_exp:get(code)
-            if exp_str and not su_meta:get("mutation:" .. code) then
-                if exp_str == "0" then
-                    local cold_entry = perm_data and perm_data[code]
-                    if not cold_entry then
-                        su_url:delete(code)
-                        su_exp:delete(code)
-                    elseif not su_url:get(code) then
-                        local restored = restore_entry(su_url, su_exp, code, cold_entry, "0", now_epoch)
-                        if not restored then
-                            ngx.log(ngx.ERR, "ShortURL: permanent entry missing from hot storage and cold restore failed: ", code)
-                        end
-                    end
-                else
-                    -- 比较 Unix 时间戳，避免不同时区偏移量影响排序结果。
-                    local exp_epoch = time_util.parse_iso8601(exp_str)
-                    local cold_entry = temp_data and temp_data[code]
-                    if not cold_entry then
-                        su_url:delete(code)
-                        su_exp:delete(code)
-                    elseif exp_epoch and is_expired(exp_epoch, now_epoch) then
-                        -- 已过期，从两个字典删除。su_url 中的条目可能已自动过期。
-                        su_url:delete(code)
-                        su_exp:delete(code)
-                    elseif exp_epoch and not su_url:get(code) then
-                        -- 条目仍有效，但 su_url 缺失时从冷存储恢复。
-                        local restored = restore_entry(su_url, su_exp, code, cold_entry, exp_str, now_epoch)
-                        if not restored then
-                            ngx.log(ngx.ERR, "ShortURL: temporary entry missing from hot storage and cold restore failed: ", code)
-                        end
-                    elseif not exp_epoch then
-                        -- 到期时间无法解析，按过期处理以释放空间。
-                        su_url:delete(code)
-                        su_exp:delete(code)
-                    end
+        -- 先建立有效冷记录的索引，再释放两个字典各自留下的孤儿。
+        local expected, temp_expiry = {}, {}
+        local actual_perm = 0
+        local actual_temp = 0
+        for code, entry in pairs(perm_data) do
+            if type(code) == "string" and type(entry) == "table" and type(entry.url) == "string" then
+                expected[code] = entry
+                actual_perm = actual_perm + 1
+            end
+        end
+        for code, entry in pairs(temp_data) do
+            if type(code) == "string" and type(entry) == "table" and type(entry.url) == "string" then
+                local exp_epoch = time_util.parse_iso8601(entry.t)
+                if exp_epoch and exp_epoch > now_epoch then
+                    expected[code] = entry
+                    temp_expiry[code] = exp_epoch
+                    actual_temp = actual_temp + 1
                 end
-                -- 有效且仍在 su_url 中的条目无需更新。
             end
         end
 
-        -- 每轮都以冷存储为权威来源双向对账，也覆盖 Go 在冷热提交之间异常退出的情况。
-        local actual_perm = 0
-        local actual_temp = 0
-        if perm_data then
-            for code, entry in pairs(perm_data) do
-                if type(code) == "string" and type(entry) == "table" and type(entry.url) == "string" then
-                    if not su_meta:get("mutation:" .. code)
-                       and (not su_url:get(code) or not su_exp:get(code)) then
-                        restore_entry(su_url, su_exp, code, entry, "0", now_epoch)
-                    end
-                    actual_perm = actual_perm + 1
+        local function remove_orphans(dict)
+            for _, code in ipairs(dict:get_keys(0)) do
+                if not expected[code] and not su_meta:get("mutation:" .. code) then
+                    su_url:delete(code)
+                    su_exp:delete(code)
                 end
             end
         end
-        if temp_data then
-            for code, entry in pairs(temp_data) do
-                if type(code) == "string" and type(entry) == "table" and type(entry.url) == "string" then
-                    local exp_str = entry.t
-                    if type(exp_str) == "string" and exp_str ~= "0" then
-                        local exp_epoch = time_util.parse_iso8601(exp_str)
-                        if exp_epoch and not is_expired(exp_epoch, now_epoch) then
-                            if not su_meta:get("mutation:" .. code)
-                               and (not su_url:get(code) or not su_exp:get(code)) then
-                                restore_entry(su_url, su_exp, code, entry, exp_str, now_epoch)
-                            end
-                            actual_temp = actual_temp + 1
-                        end
-                    end
+        remove_orphans(su_url)
+        remove_orphans(su_exp)
+
+        for code, entry in pairs(expected) do
+            local expires = temp_expiry[code]
+            local exp = expires and entry.t or "0"
+            if not su_meta:get("mutation:" .. code)
+               and (su_url:get(code) ~= entry.url or su_exp:get(code) ~= exp) then
+                local ttl = expires and expires - now_epoch or 0
+                local restored, reason = restore_entry(su_url, su_exp, code, entry.url, exp, ttl)
+                if not restored then
+                    su_url:delete(code)
+                    su_exp:delete(code)
+                    ngx.log(ngx.ERR, "ShortURL: cold restore failed for code=", code, " reason=", tostring(reason))
                 end
             end
         end
