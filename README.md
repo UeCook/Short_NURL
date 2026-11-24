@@ -4,14 +4,14 @@
 >
 > Self-hosted URL shortener | OpenResty + Go | JSON cold storage | `lua_shared_dict` hot storage | No database or Redis
 
-![Version](https://img.shields.io/badge/version-v3.0.3-4c8bf5)
+![Version](https://img.shields.io/badge/version-v3.1.4-4c8bf5)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Runtime](https://img.shields.io/badge/runtime-OpenResty%20%2B%20Go-green)
 ![Storage](https://img.shields.io/badge/storage-JSON%20%2B%20shared--dict-orange)
 ![Docs](https://img.shields.io/badge/build%20guide-Chinese-red)
 
 
-- 在线文档 / Online documentation：[https://nurl.uoca.top/](https://blog.uoca.top/Short_NURL)
+- 在线文档 / Online documentation：[https://nurl.uoca.top/](https://nurl.uoca.top/)
 - 演示 / Demo：[https://r.uoca.top](https://r.uoca.top)
 
 部署 V3 时请以当前仓库的配置和说明为准；在线文档中的历史版本示例需要按版本核对。以下输出示例只保留识别特征，路径和凭证均使用占位符。
@@ -44,11 +44,11 @@ Short_NURL 的 Lua 后端运行在 OpenResty + LuaJIT 上。
 
 - **前后端分离**：静态 WebUI 通过 API 管理短链，Go 承担认证和业务处理。
 - **内存级跳转**：OpenResty / Lua 从共享字典读取目标地址，JSON 文件仅负责持久化。
-- **无 Go 独立运营**：手工模式只读 JSON，完整快照切换，错误文件或候选内存装载失败时自动保留上一版。
-- **跳转防扫描**：所有 worker 共享未命中封禁与查询前的全局额度，覆盖多来源扫描与 GET/HEAD；配置及可用性取舍见 [Nginx 说明](deploy/nginx/nginx.md)。
+- **无 Go 独立运营**：手工模式只读 JSON，完整快照切换，错误文件或候选内存装载失败时自动保留上一版。配置见[手工模式示例](deploy/nginx/manual.conf.example)。
+- **跳转防扫描**：所有 worker 共享未命中封禁与查询前的全局额度，覆盖多来源扫描与 GET/HEAD，配置见 [Lua 配置](backend/lua/shorturl/config.lua)。
 - **支持永久短链与临时短链**：支持永久短链和带 TTL 的临时短链。
 - **支持自定义短码**：普通 Key 支持 1–4 位自定义短码；服务 Key 经无头 API 支持最长 5 位。
-- **人类友好短码**：排除 `0/1/i/l/o`，禁止相邻重复字符，以及 `m/n/r`、`u/v/w` 各组内部的相邻组合（如 `rn`、`vv`、`ww`、`vw`）。规则统一用于 所有自动短码；自定义短码与已有短链保持兼容，永久 URL 去重仍可返回已有短码。
+- **人类友好短码**：排除 `0/1/i/l/o`，禁止相邻重复字符，以及 `m/n/r`、`u/v/w` 各组内部的相邻组合（如 `rn`、`vv`、`ww`、`vw`）。规则统一用于所有自动短码；自定义短码与已有短链保持兼容，永久 URL 去重仍可返回已有短码。
 - **三类 API Key**：常驻 Key、一次性 Key 和服务 Key，按通道与操作限制权限。
 - **内置 API 防刷**：默认开启每 IP/全局限流、并发上限、错误 Key 逐级提示和递增封禁，无需 fail2ban、Redis 或 Cloudflare。
 - **内部通信认证**：Go 与 Lua 使用独立的 `LPA-Key`，缺失或校验失败时拒绝内部请求。
@@ -160,7 +160,7 @@ Go 入口并发上限是一项冗余保护设计，与存储锁的 2 秒等待�
 
 ### 1. 选择运行包或自行编译
 
-下载与目标机器匹配的运行包并解压。需要从源码编译时，参照 [BUILD.md](BUILD.md)。源码包包含 Go、Lua、前端资源及说明；编译后的程序位于运行包的 `bin/` 中。
+下载与目标机器匹配的运行包并解压。需要从源码编译时，用 Go 1.24 或更新版本运行 `go build -o bin/ ./cmd/nurl-server ./cmd/nurl ./cmd/nurl-key`。源码包包含 Go、Lua、前端资源及说明；编译后的程序位于运行包的 `bin/` 中。
 
 | 系统 | 运行包架构后缀 |
 | --- | --- |
@@ -176,7 +176,7 @@ chmod +x ./bin/nurl-server ./bin/nurl ./bin/nurl-key
 ./bin/nurl-server -version
 ```
 
-应看到 `3.0.3_GitHub`。Windows 使用 `.\bin\nurl-server.exe -version`，其余命令也使用对应的 `.exe` 文件。
+应看到 `3.1.4_GitHub`。Windows 使用 `.\bin\nurl-server.exe -version`，其余命令也使用对应的 `.exe` 文件。
 
 ### 2. 修改自己的配置
 
@@ -234,7 +234,7 @@ Windows PowerShell：
 
 出现 `nurl-server 启动` 日志后，保持进程运行。
 
-参照 [Nginx 配置片段](deploy/nginx/nginx.md)，配置共享字典、内部 Lua 接口、API 反向代理和短链跳转；将 `index.html`、`frontend/` 作为静态站点提供。Go 与 Lua 必须使用相同的数据文件和内部令牌。Go 进程需要写入数据目录；OpenResty 需要读取数据和令牌，首次冷启动创建空数据文件时还需目录写权限。
+托管模式下，配置共享字典、仅供 Go 服务访问的内部 Lua 接口、`/api/` 和 `/headless/` 的反向代理及短链跳转；将 `index.html`、`frontend/` 作为静态站点提供。Go 与 Lua 必须使用相同的数据文件和内部令牌。Go 进程需要写入数据目录；OpenResty 需要读取数据和令牌，首次冷启动创建空数据文件时还需目录写权限。
 
 ### 5. 验证服务
 
@@ -386,226 +386,4 @@ go vet ./...
 
 测试通过的行以 `ok` 开头，可能带 `(cached)`；`go vet` 成功时通常无输出。历史 PHP 对照测试需要另行配置 `PHP_BIN`、`PHP_SRC`，未配置时跳过。
 
-适合个人、私有部署及小规模内部链接管理。编译步骤、架构选择和输出特征见 [BUILD.md](BUILD.md)。
-
----
-
-## English
-
-> The following translation was done by ChatGPT-6.1-Sol and is for reference only.
-
-### Introduction
-
-**Short_NURL** is a self-hosted URL shortener for personal and small internal deployments. OpenResty/Lua handles redirects, while Go handles management APIs, authentication, persistence, and CLI tools. It requires no database or Redis.
-
-JSON files remain the authoritative cold storage. `lua_shared_dict` provides hot storage for redirects; a normal hot-cache hit does not call the Go service or read from disk.
-
-V2 separated the frontend and consolidated the backend built on PHP. V3 continues that structure and migrates the management backend and CLI tools to Go. The earlier PHP service was taken offline over the risks associated with [CVE-2026-109618](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w) and [CVE-2026-109619](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp), prompting this migration.
-
-Prebuilt Go programs do not require PHP or a Go installation. A complete deployment still requires OpenResty/Nginx with Lua support and access to the same data files and internal token.
-
-### Highlights
-
-- Static WebUI, Go management APIs, and OpenResty/Lua redirects.
-- Permanent and temporary links, custom codes, and automatic permanent-URL deduplication.
-- Resident, one-time, and service API Keys with channel and operation restrictions.
-- Authenticated Go-to-Lua synchronization using a separate `LPA-Key`.
-- File locks, temporary writes, backups, atomic replacement, and readback verification.
-- Strict hot-storage synchronization by default; optional cold-storage fallback reports `synced` and `warning`.
-- URL validation rejects private, loopback, and other unsafe destinations.
-- Windows x86 32/64-bit and ARM64 programs; Linux x86 32/64-bit, ARMv7, and ARM64 programs.
-
-### Quick Start
-
-Choose a runtime archive matching the target system, or build from source using [BUILD.md](BUILD.md). The build guide and [Nginx snippets](deploy/nginx/nginx.md) are currently written in Chinese.
-
-From the extracted runtime directory, edit `config/config.json` for your own deployment. Set `site.domain` to a complete HTTP(S) origin and configure the Go listener, data paths, and `internal.host`. Runtime configuration is not embedded in the binaries.
-
-On Linux, initialize and check the deployment:
-
-```sh
-chmod +x ./bin/nurl-server ./bin/nurl ./bin/nurl-key
-./bin/nurl-server -version
-./bin/nurl -new
-./bin/nurl-server -check
-```
-
-Look for `3.0.3_GitHub` and the final check message `自检通过。`. Initialization prints new credentials; this README omits their values. On Windows, use the corresponding `.exe` programs, such as `.\bin\nurl.exe -new`.
-
-Start the Go service and keep it running:
-
-```sh
-./bin/nurl-server -config ./config/config.json
-```
-
-Look for `nurl-server 启动` in the log. Configure OpenResty to serve `index.html` and `frontend/`, proxy the management APIs, provide the internal Lua API, and handle short-link redirects. Use the same JSON paths and internal token in Go and Lua. Go needs data-directory write access; OpenResty needs read access and permission to initialize missing JSON files during cold start.
-
-From another terminal, replace the example domain with your own:
-
-```sh
-curl -sS https://short.example.com/api/ping
-```
-
-Expected body: `{"ok":true}`. This checks the Go API; verify hot storage separately through authenticated statistics and a create/redirect test.
-
-### Keys and Synchronization
-
-| Key type | Lifetime | Scope |
-| --- | --- | --- |
-| Resident | 7 days by default | WebUI and Headless creation and management |
-| One-time | No expiry before use | Creation only, through either channel |
-| Service | No expiry | Headless only; supports 4/5-character generated codes |
-
-One-time Keys are reserved during authentication and consumed after successful creation. Ordinary business failures release the reservation; unfinished reservations become invalid after 60 seconds. The pool is refilled manually with `nurl -full`.
-
-- `cold_fallback=false`: the default strict mode returns `503` on hot-sync failure without committing the cold-storage change.
-- `cold_fallback=true`: cold changes may commit with `synced=false` and a warning. Redirect availability may lag until reconciliation.
-
-The default permanent/temporary limits are 10000/500 for both regular and service settings. Keys share the same link store; quota settings do not provide tenant isolation.
-
-### API Overview
-
-| Channel | Authentication | Endpoints |
-| --- | --- | --- |
-| WebUI | `X-Token`; POST bodies may also provide `key` | `POST /api/create`, `POST /api/delete`, `GET /api/list`, `GET /api/stat` |
-| Headless | `X-Headless-Token` only | `POST /headless/api/create`, `POST /headless/api/delete`, `GET /headless/api/list`, `GET /headless/api/stat`, `GET /headless/api/get/{code}` |
-
-`GET /api/ping` and `HEAD /api/ping` require no authentication. Create/delete responses report hot synchronization status. Service Keys are accepted only by the Headless channel; one-time Keys cannot perform management operations.
-
-### CLI Tools
-
-| Program | Role |
-| --- | --- |
-| `nurl-server` | HTTP APIs, configuration checks, and cold-data verification |
-| `nurl` | Local Key administration, pool refill, internal-token rotation, and expiry cleanup |
-| `nurl-key` | Remote Headless client for link creation, queries, deletion, lists, and statistics |
-
-After generating a service Key, store its value in a private file. Assuming `backend/data/client-key.txt` contains that Key:
-
-```sh
-./bin/nurl-key -key-file ./backend/data/client-key.txt -add -url https://example.com -ttl 0 -len 5
-```
-
-Look for `短链创建成功：` on success. Use `-h` for all supported options. For V3, follow the current repository configuration and guides when older online documentation differs.
-
----
-
-## License
-
-Short_NURL is licensed under the [Apache License 2.0](LICENSE.txt).
-
-```text
-Copyright 2026 Uecook / 圣堂之魂
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-```
-
-### NOTICE
-
-```text
-Short_NURL
-Copyright 2026 Uecook / 圣堂之魂
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-
-Short_NURL by Uecook / 圣堂之魂
-GitHub: https://github.com/UeCook/Short_NURL
-
-NOTICE: In accordance with Section 4(d) of the Apache License 2.0,
-any distribution of this software or derivative works MUST publicly
-retain this attribution and version information in at least one of
-the following locations:
-  1. A "NOTICE" text file distributed with the software
-  2. Source code or accompanying documentation
-  3. User interface (e.g. About page, Startup screen, Legal/Attributions section)
-
-You may add your own attribution notices to this file, but you may not
-modify or remove the above notices in any way that alters their meaning.
-```
----
-
-The web interface uses [Basecoat UI](https://github.com/hunvreus/basecoat), licensed under the [MIT License](frontend/LICENSE.txt).
-
-页面前端使用 Basecoat UI 构建。
-
-```
-MIT License
-
-Copyright (c) 2025 Ronan Berder
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-页面中使用的图标来自 Lucide 。
-
-```
-ISC License
-
-Copyright (c) 2026 Lucide Icons and Contributors
-
-Permission to use, copy, modify, and/or distribute this software for any
-purpose with or without fee is hereby granted, provided that the above
-copyright notice and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
-ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
-ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
-OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-
----
-
-The following Lucide icons are derived from the Feather project:
-
-airplay, alert-circle, alert-octagon, alert-triangle, aperture, arrow-down-circle, arrow-down-left, arrow-down-right, arrow-down, arrow-left-circle, arrow-left, arrow-right-circle, arrow-right, arrow-up-circle, arrow-up-left, arrow-up-right, arrow-up, at-sign, calendar, cast, check, chevron-down, chevron-left, chevron-right, chevron-up, chevrons-down, chevrons-left, chevrons-right, chevrons-up, circle, clipboard, clock, code, columns, command, compass, corner-down-left, corner-down-right, corner-left-down, corner-left-up, corner-right-down, corner-right-up, corner-up-left, corner-up-right, crosshair, database, divide-circle, divide-square, dollar-sign, download, external-link, feather, frown, hash, headphones, help-circle, info, italic, key, layout, life-buoy, link-2, link, loader, lock, log-in, log-out, maximize, meh, minimize, minimize-2, minus-circle, minus-square, minus, monitor, moon, more-horizontal, more-vertical, move, music, navigation-2, navigation, octagon, pause-circle, percent, plus-circle, plus-square, plus, power, radio, rss, search, server, share, shopping-bag, sidebar, smartphone, smile, square, table-2, tablet, target, terminal, trash-2, trash, triangle, tv, type, upload, x-circle, x-octagon, x-square, x, zoom-in, zoom-out
-
-The MIT License (MIT) (for the icons listed above)
-
-Copyright (c) 2013-present Cole Bemis
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
+适合个人、私有部署及小规模内部链接管理。编译命令、架构选择和版本输出见[获取与部署](#获取与部署)。
