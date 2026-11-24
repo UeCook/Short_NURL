@@ -156,9 +156,9 @@ Go 入口并发上限是一项冗余保护设计，与存储锁的 2 秒等待�
 | 上限 128 | 9,915 | 0 | 374 | 9,541 | 9,227 | 75 | 239 |
 | 取消上限 | 9,915 | 0 | 376 | 9,539 | 8,532 | 768 | 239 |
 
-### 获取与部署
+## 获取与部署
 
-#### 1. 选择运行包或自行编译
+### 1. 选择运行包或自行编译
 
 下载与目标机器匹配的运行包并解压。需要从源码编译时，参照 [BUILD.md](BUILD.md)。源码包包含 Go、Lua、前端资源及说明；编译后的程序位于运行包的 `bin/` 中。
 
@@ -178,7 +178,7 @@ chmod +x ./bin/nurl-server ./bin/nurl ./bin/nurl-key
 
 应看到 `3.0.3_GitHub`。Windows 使用 `.\bin\nurl-server.exe -version`，其余命令也使用对应的 `.exe` 文件。
 
-#### 2. 修改自己的配置
+### 2. 修改自己的配置
 
 编辑 `config/config.json`，保留配置文件中的其他字段，按部署环境调整：
 
@@ -193,7 +193,7 @@ chmod +x ./bin/nurl-server ./bin/nurl ./bin/nurl-key
 
 源码中的域名占位符需要替换后才能正常启动。配置在运行时读取，不会编译进二进制。可通过环境变量 `NURL_CONFIG` 指定配置文件，服务端也支持 `-config <配置文件路径>`。
 
-#### 3. 初始化并自检
+### 3. 初始化并自检
 
 Linux：
 
@@ -218,7 +218,7 @@ Windows PowerShell：
 自检通过。
 ```
 
-#### 4. 启动 Go 服务并配置 OpenResty
+### 4. 启动 Go 服务并配置 OpenResty
 
 Linux：
 
@@ -236,7 +236,7 @@ Windows PowerShell：
 
 参照 [Nginx 配置片段](deploy/nginx/nginx.md)，配置共享字典、内部 Lua 接口、API 反向代理和短链跳转；将 `index.html`、`frontend/` 作为静态站点提供。Go 与 Lua 必须使用相同的数据文件和内部令牌。Go 进程需要写入数据目录；OpenResty 需要读取数据和令牌，首次冷启动创建空数据文件时还需目录写权限。
 
-#### 5. 验证服务
+### 5. 验证服务
 
 另开终端，将示例域名替换成自己的站点地址：
 
@@ -252,7 +252,7 @@ Windows 可使用 `curl.exe`。预期响应为：
 
 `/api/ping` 验证 Go API 存活；热存储连接情况需要查看经过认证的 `/api/stat` 中的 `hot_available`，并实际确认创建响应的 `synced` 和短链跳转。
 
-### 存储模型与同步策略
+## 存储模型与同步策略
 
 | 文件 | 用途 |
 | --- | --- |
@@ -284,7 +284,7 @@ Windows 可使用 `curl.exe`。预期响应为：
 - `cold_fallback=false`：默认严格模式。热同步失败时返回 `503`，不提交本次冷存储变更。
 - `cold_fallback=true`：允许热同步未确认时提交冷数据，并返回 `synced=false` 和 `warning`。创建的链接可能暂不可用，删除的链接可能仍可访问，等待后台对账。
 
-### Key 类型
+## Key 类型
 
 | 类型 | 生命周期 | 使用范围 | 说明 |
 | --- | --- | --- | --- |
@@ -294,9 +294,9 @@ Windows 可使用 `curl.exe`。预期响应为：
 
 一次性 Key 在认证时先预约，创建成功后消费；普通业务失败会释放预约。超过 60 秒未完成的预约会使 Key 失效。Key 池不会自动补充，可用 `./bin/nurl -full` 手动补充。
 
-### API 概览
+## API 概览
 
-#### WebUI API
+### WebUI API
 
 面向浏览器前端，支持 CORS。业务请求使用 `X-Token`；POST 请求也可在 JSON 中传入 `key`，请求头优先。
 
@@ -308,7 +308,7 @@ Windows 可使用 `curl.exe`。预期响应为：
 | `GET` | `/api/list` | 查询短链列表 |
 | `GET` | `/api/stat` | 查询冷存储计数和热存储诊断信息 |
 
-#### Headless API
+### Headless API
 
 面向脚本、其他后端和 CLI，仅接受 `X-Headless-Token` 认证。
 
@@ -333,7 +333,7 @@ Windows 可使用 `curl.exe`。预期响应为：
 }
 ```
 
-### CLI 工具
+## CLI 工具
 
 | 工具 | 定位 | 主要用途 |
 | --- | --- | --- |
@@ -375,7 +375,7 @@ Linux 常用本地命令（Windows 使用对应 `.exe`）：
 
 对应 `quota.perm_limit`、`temp_limit`、`svc_perm_limit`、`svc_temp_limit`，四项配置的合计不得超过 30000。各类 Key 共用短链存储，请求按调用类型使用对应上限；这些配置不提供多租户数据隔离。调整容量时还需评估 Lua 共享字典大小。
 
-### 测试与适用场景
+## 测试与适用场景
 
 源码目录中可执行：
 
